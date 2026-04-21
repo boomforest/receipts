@@ -1,5 +1,5 @@
 import React, { useState } from 'react'
-import { parseWhatsApp, summarize } from './parser'
+import { parseWhatsApp, parseRaw, flipAlternating, summarize } from './parser'
 import { redact, unredact, buildPayload } from './redact'
 import { C, BRAND, FONT } from './theme'
 
@@ -12,37 +12,66 @@ export default function App() {
   const [redaction, setRedaction] = useState(null)
   const [analysis, setAnalysis] = useState('')
   const [error, setError]       = useState('')
+  const [sourceKind, setSourceKind] = useState('')    // 'whatsapp' | 'paste'
 
   const reset = () => {
     setStage('upload'); setFilename(''); setMessages([])
     setSummary(null); setMeSender(''); setRedaction(null)
-    setAnalysis(''); setError('')
+    setAnalysis(''); setError(''); setSourceKind('')
   }
 
-  const handleFile = async (file) => {
-    if (!file) return
-    setFilename(file.name)
+  // Single ingest path — works for both file uploads and pasted text.
+  const ingestText = (text, sourceLabel) => {
     setError('')
     try {
-      const text = await file.text()
-      const msgs = parseWhatsApp(text)
+      const { kind, messages: msgs } = parseRaw(text)
       if (msgs.length === 0) {
-        throw new Error("Couldn't find any messages. Make sure it's the .txt file from WhatsApp's Export Chat.")
+        throw new Error("Couldn't find any messages in that. Try the WhatsApp .txt export, or paste a chat with at least a few back-and-forth lines.")
       }
+      setSourceKind(kind)
+      setFilename(sourceLabel || (kind === 'whatsapp' ? 'WhatsApp export' : 'Pasted chat'))
       const sum = summarize(msgs)
       setMessages(msgs)
       setSummary(sum)
-      // If only 2 senders, default "me" guess to whichever sent more — user can flip
       if (sum.senders.length >= 2) {
         setMeSender(sum.senders[0])
         setStage('pickme')
+      } else if (kind === 'paste' && sum.senders.length === 1) {
+        // Single-sender paste — usually means the user pasted only one side
+        throw new Error("Only found messages from one person. Make sure you copied both sides of the conversation.")
       } else {
-        throw new Error('This export only has one sender. Make sure it includes both sides of the conversation.')
+        throw new Error('Need at least two participants to read the receipts.')
       }
     } catch (e) {
       setError(e.message)
       setStage('error')
     }
+  }
+
+  const handleFile = async (file) => {
+    if (!file) return
+    const text = await file.text()
+    ingestText(text, file.name)
+  }
+
+  const handlePaste = (text) => {
+    if (!text || text.trim().length < 20) {
+      setError('That paste is too short. Need at least a few back-and-forth messages.')
+      setStage('error')
+      return
+    }
+    ingestText(text, 'Pasted chat')
+  }
+
+  // For pasted iMessage content where senders alternate — let the user flip
+  // the "me" assignment if our default got it backwards.
+  const flipMeAssignment = () => {
+    if (sourceKind !== 'paste') return
+    const flipped = flipAlternating(messages)
+    setMessages(flipped)
+    const sum = summarize(flipped)
+    setSummary(sum)
+    setMeSender(meSender === 'Sender 1' ? 'Sender 2' : 'Sender 1')
   }
 
   const goPreview = () => {
@@ -94,8 +123,8 @@ export default function App() {
           <span style={{ fontSize: '0.7rem', color: C.textMid, border: `1px solid ${C.border}`, borderRadius: 99, padding: '0.2rem 0.6rem' }}>v0.1 · beta</span>
         </div>
 
-        {stage === 'upload'    && <Upload onFile={handleFile} />}
-        {stage === 'pickme'    && <PickMe summary={summary} meSender={meSender} setMeSender={setMeSender} onNext={goPreview} />}
+        {stage === 'upload'    && <Upload onFile={handleFile} onPaste={handlePaste} />}
+        {stage === 'pickme'    && <PickMe summary={summary} meSender={meSender} setMeSender={setMeSender} onNext={goPreview} sourceKind={sourceKind} onFlip={flipMeAssignment} />}
         {stage === 'preview'   && <Preview redaction={redaction} onAnalyze={analyze} onBack={() => setStage('pickme')} />}
         {stage === 'analyzing' && <Analyzing />}
         {stage === 'result'    && <Result analysis={analysis} redaction={redaction} themSender={redaction.themSender} onReset={reset} />}
@@ -112,33 +141,84 @@ export default function App() {
 }
 
 // ─── UPLOAD ───────────────────────────────────────────────────────────────────
-function Upload({ onFile }) {
+function Upload({ onFile, onPaste }) {
+  const [tab, setTab] = useState('upload')   // upload | paste
+  const [pasted, setPasted] = useState('')
+
   return (
     <div>
       <Eyebrow>An honest read of your texts</Eyebrow>
       <h1 style={{ fontSize: 'clamp(1.8rem, 5vw, 2.5rem)', fontWeight: 900, lineHeight: 1.1, letterSpacing: '-0.025em', margin: '0.4rem 0 1rem' }}>
         Drop in a chat. <br /><span style={{ background: BRAND.gradient, WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>Get the truth.</span>
       </h1>
-      <p style={{ color: C.textMid, fontSize: '1rem', lineHeight: 1.6, marginBottom: '2rem' }}>
+      <p style={{ color: C.textMid, fontSize: '1rem', lineHeight: 1.6, marginBottom: '1.5rem' }}>
         Six lenses. No bullshit. The friend who tells you what your other friends won't.
       </p>
 
-      <label style={{ display: 'block', cursor: 'pointer', border: `1.5px dashed ${BRAND.pink}55`, borderRadius: 16, padding: '2.5rem 1.5rem', textAlign: 'center', background: C.card, transition: 'all 0.2s' }}
-        onDragOver={e => e.preventDefault()}
-        onDrop={e => { e.preventDefault(); onFile(e.dataTransfer.files?.[0]) }}
-      >
-        <div style={{ fontSize: '2rem', marginBottom: '0.5rem' }}>📎</div>
-        <div style={{ fontWeight: 700, fontSize: '1rem', marginBottom: '0.4rem' }}>Drop your WhatsApp .txt export</div>
-        <div style={{ fontSize: '0.82rem', color: C.textMid, lineHeight: 1.6 }}>
-          On your phone: open the chat → More → <strong style={{ color: C.text }}>Export Chat</strong> → Without Media → email to yourself
-        </div>
-        <input type="file" accept=".txt,text/plain" onChange={e => onFile(e.target.files?.[0])} style={{ display: 'none' }} />
-        <div style={{ marginTop: '1.25rem', display: 'inline-block', background: BRAND.gradient, color: '#000', borderRadius: 10, padding: '0.7rem 1.4rem', fontWeight: 800, fontSize: '0.9rem' }}>
-          Choose file
-        </div>
-      </label>
+      {/* Tab switcher */}
+      <div style={{ display: 'flex', gap: '0.4rem', marginBottom: '1rem', background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: '0.25rem' }}>
+        {[['upload', 'Upload .txt'], ['paste', 'Paste chat']].map(([k, label]) => (
+          <button key={k} onClick={() => setTab(k)} style={{
+            flex: 1, padding: '0.55rem', borderRadius: 7, border: 'none',
+            background: tab === k ? BRAND.gradient : 'transparent',
+            color: tab === k ? '#000' : C.textMid,
+            cursor: 'pointer', fontSize: '0.82rem', fontWeight: 700, fontFamily: FONT,
+          }}>{label}</button>
+        ))}
+      </div>
 
-      <div style={{ marginTop: '2rem', background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: '1rem 1.2rem' }}>
+      {tab === 'upload' && (
+        <label style={{ display: 'block', cursor: 'pointer', border: `1.5px dashed ${BRAND.pink}55`, borderRadius: 16, padding: '2.5rem 1.5rem', textAlign: 'center', background: C.card }}
+          onDragOver={e => e.preventDefault()}
+          onDrop={e => { e.preventDefault(); onFile(e.dataTransfer.files?.[0]) }}
+        >
+          <div style={{ fontSize: '2rem', marginBottom: '0.5rem' }}>📎</div>
+          <div style={{ fontWeight: 700, fontSize: '1rem', marginBottom: '0.4rem' }}>Drop your WhatsApp .txt export</div>
+          <div style={{ fontSize: '0.82rem', color: C.textMid, lineHeight: 1.6 }}>
+            On your phone: open the chat → More → <strong style={{ color: C.text }}>Export Chat</strong> → Without Media → email to yourself
+          </div>
+          <input type="file" accept=".txt,text/plain" onChange={e => onFile(e.target.files?.[0])} style={{ display: 'none' }} />
+          <div style={{ marginTop: '1.25rem', display: 'inline-block', background: BRAND.gradient, color: '#000', borderRadius: 10, padding: '0.7rem 1.4rem', fontWeight: 800, fontSize: '0.9rem' }}>
+            Choose file
+          </div>
+        </label>
+      )}
+
+      {tab === 'paste' && (
+        <div>
+          <textarea
+            value={pasted}
+            onChange={e => setPasted(e.target.value)}
+            placeholder={`Paste your conversation here.\n\nWorks with iMessage (open Messages on Mac → Cmd+A → Cmd+C → paste here), or any chat where you can see both sides.\n\nDon't worry about formatting — we'll figure it out.`}
+            rows={10}
+            style={{
+              width: '100%', boxSizing: 'border-box',
+              background: C.card, border: `1px solid ${C.border}`,
+              borderRadius: 12, color: C.text, padding: '1rem',
+              fontSize: '0.88rem', outline: 'none', fontFamily: FONT,
+              resize: 'vertical', minHeight: 220, lineHeight: 1.5,
+            }}
+          />
+          <button
+            onClick={() => onPaste(pasted)}
+            disabled={pasted.trim().length < 20}
+            style={{
+              width: '100%', marginTop: '0.75rem',
+              background: pasted.trim().length < 20 ? '#1a1a24' : BRAND.gradient,
+              color: pasted.trim().length < 20 ? C.textMid : '#000',
+              border: 'none', borderRadius: 10, padding: '0.95rem',
+              fontWeight: 800, fontSize: '0.95rem',
+              cursor: pasted.trim().length < 20 ? 'not-allowed' : 'pointer', fontFamily: FONT,
+            }}
+          >
+            Use this chat →
+          </button>
+        </div>
+      )}
+
+      <HowToExport />
+
+      <div style={{ marginTop: '1.5rem', background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: '1rem 1.2rem' }}>
         <div style={{ fontSize: '0.7rem', color: BRAND.neon, textTransform: 'uppercase', letterSpacing: '0.12em', fontWeight: 700, marginBottom: '0.5rem' }}>Privacy</div>
         <div style={{ color: C.textMid, fontSize: '0.85rem', lineHeight: 1.6 }}>
           Your messages never touch our servers. Names, phone numbers, emails, and links are stripped right here in your browser. The AI sees "Person A" and "Person B."
@@ -148,16 +228,102 @@ function Upload({ onFile }) {
   )
 }
 
+// ─── HOW TO EXPORT (collapsible tutorial) ────────────────────────────────────
+function HowToExport() {
+  const [open, setOpen] = useState(false)
+  const [tab, setTab] = useState('whatsapp')
+
+  return (
+    <div style={{ marginTop: '1.25rem', background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: '0.85rem 1.2rem' }}>
+      <button onClick={() => setOpen(!open)} style={{
+        background: 'transparent', border: 'none', color: C.text, padding: 0,
+        fontFamily: FONT, fontSize: '0.88rem', fontWeight: 700, cursor: 'pointer',
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%',
+      }}>
+        <span>How do I get my chat?</span>
+        <span style={{ color: C.textMid, fontSize: '0.85rem' }}>{open ? '−' : '+'}</span>
+      </button>
+
+      {open && (
+        <div style={{ marginTop: '1rem' }}>
+          <div style={{ display: 'flex', gap: '0.3rem', marginBottom: '0.85rem', borderBottom: `1px solid ${C.border}` }}>
+            {[
+              ['whatsapp', 'WhatsApp'],
+              ['imessage-mac', 'iMessage (Mac)'],
+              ['imessage-iphone', 'iMessage (iPhone)'],
+            ].map(([k, label]) => (
+              <button key={k} onClick={() => setTab(k)} style={{
+                background: 'transparent', border: 'none',
+                color: tab === k ? BRAND.pink : C.textMid,
+                borderBottom: `2px solid ${tab === k ? BRAND.pink : 'transparent'}`,
+                padding: '0.4rem 0.6rem', cursor: 'pointer', fontSize: '0.78rem', fontWeight: 700, fontFamily: FONT, marginBottom: -1,
+              }}>{label}</button>
+            ))}
+          </div>
+
+          {tab === 'whatsapp' && (
+            <ol style={{ color: C.textMid, fontSize: '0.85rem', lineHeight: 1.7, paddingLeft: '1.1rem', margin: 0 }}>
+              <li>Open the conversation in WhatsApp on your phone</li>
+              <li>Tap the contact's name at the top of the chat</li>
+              <li>Scroll down → tap <strong style={{ color: C.text }}>Export Chat</strong></li>
+              <li>Choose <strong style={{ color: C.text }}>Without Media</strong> (way smaller file)</li>
+              <li>Email it to yourself, or save to Files</li>
+              <li>Come back here and drop the .txt file on the upload tab</li>
+            </ol>
+          )}
+
+          {tab === 'imessage-mac' && (
+            <div style={{ color: C.textMid, fontSize: '0.85rem', lineHeight: 1.7 }}>
+              <p style={{ margin: '0 0 0.6rem' }}>
+                <strong style={{ color: C.text }}>The fast way:</strong>
+              </p>
+              <ol style={{ paddingLeft: '1.1rem', margin: '0 0 0.85rem' }}>
+                <li>Open <strong style={{ color: C.text }}>Messages</strong> on your Mac</li>
+                <li>Click into the conversation you want to read</li>
+                <li>Press <strong style={{ color: C.text }}>Cmd+A</strong> to select all messages, then <strong style={{ color: C.text }}>Cmd+C</strong> to copy</li>
+                <li>Switch to the <strong style={{ color: C.text }}>Paste chat</strong> tab above and paste</li>
+                <li>Click "Use this chat →"</li>
+              </ol>
+              <p style={{ margin: 0, fontSize: '0.78rem', color: C.textDim }}>
+                Note: paste loses some sender info. We'll alternate by default — there's a "Flip" button on the next step if it gets it backwards.
+              </p>
+            </div>
+          )}
+
+          {tab === 'imessage-iphone' && (
+            <div style={{ color: C.textMid, fontSize: '0.85rem', lineHeight: 1.7 }}>
+              <ol style={{ paddingLeft: '1.1rem', margin: '0 0 0.85rem' }}>
+                <li>Open the conversation in <strong style={{ color: C.text }}>Messages</strong></li>
+                <li>Long-press any message → tap <strong style={{ color: C.text }}>More…</strong></li>
+                <li>Circles appear next to each message — tap them to select the ones you want</li>
+                <li>Tap the <strong style={{ color: C.text }}>share / forward arrow</strong> at the bottom-left, then forward to yourself in the Notes app</li>
+                <li>Open Notes, copy the text, paste here on the <strong style={{ color: C.text }}>Paste chat</strong> tab</li>
+              </ol>
+              <p style={{ margin: 0, fontSize: '0.78rem', color: C.textDim }}>
+                Way easier on Mac if you have one. iPhone selecting is slow for long chats.
+              </p>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ─── PICK ME ──────────────────────────────────────────────────────────────────
-function PickMe({ summary, meSender, setMeSender, onNext }) {
+function PickMe({ summary, meSender, setMeSender, onNext, sourceKind, onFlip }) {
   const others = summary.senders
+  const isPaste = sourceKind === 'paste'
+
   return (
     <div>
       <Eyebrow>Step 1 of 2</Eyebrow>
       <h2 style={{ fontSize: '1.4rem', fontWeight: 900, letterSpacing: '-0.02em', margin: '0.4rem 0 0.5rem' }}>Which one is you?</h2>
       <p style={{ color: C.textMid, fontSize: '0.92rem', marginBottom: '1.5rem' }}>
-        We found {summary.total.toLocaleString()} messages across {summary.days} days. Tell us which sender is you so we know who's reading whom.
+        Found {summary.total.toLocaleString()} messages{summary.days > 1 ? ` across ${summary.days} days` : ''}.
+        {isPaste && ' Pasted text doesn\'t carry sender labels — we alternated. Pick yourself below; if the messages look swapped, hit "Flip senders."'}
       </p>
+
       <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
         {others.map(s => (
           <button key={s} onClick={() => setMeSender(s)} style={{
@@ -170,6 +336,18 @@ function PickMe({ summary, meSender, setMeSender, onNext }) {
           </button>
         ))}
       </div>
+
+      {isPaste && (
+        <button onClick={onFlip} style={{
+          marginTop: '0.85rem', width: '100%', background: 'transparent',
+          color: C.textMid, border: `1px solid ${C.border}`,
+          borderRadius: 10, padding: '0.7rem', fontSize: '0.82rem', fontWeight: 600,
+          cursor: 'pointer', fontFamily: FONT,
+        }}>
+          ↔ Flip senders (if our guess was backwards)
+        </button>
+      )}
+
       <button onClick={onNext} disabled={!meSender} style={{
         marginTop: '1.5rem', background: meSender ? BRAND.gradient : '#1a1a24', color: meSender ? '#000' : C.textMid,
         border: 'none', borderRadius: 10, padding: '0.95rem 1.5rem', fontWeight: 800, fontSize: '0.95rem',

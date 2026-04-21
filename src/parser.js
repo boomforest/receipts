@@ -73,6 +73,74 @@ export function parseWhatsApp(text) {
   return messages.filter(m => m.body && m.body.length > 0)
 }
 
+// Fallback parser for messy pasted content (iMessage Mac/iPhone copy-paste,
+// random chat exports without our standard format).
+//
+// iMessage on Mac, when you Cmd+A → Cmd+C in Messages, you get something like:
+//
+//   Today 9:34 PM
+//   Hey what are you doing
+//   ok
+//   Yesterday 11:22 PM
+//   hey
+//
+// There are no sender labels — alternating sides aren't preserved in plain text.
+// So we treat each non-timestamp line as a message and ask the user (in the UI)
+// to mark "I'm the one whose messages start with [marker]" or use alternating mode.
+//
+// Strategy: detect lines that look like timestamps/date headers (drop them), then
+// emit each remaining line as a message. We assign senders in alternating fashion
+// by default — UI lets the user flip if it got it backwards.
+
+const IMESSAGE_TIME_RE = /^(today|yesterday|monday|tuesday|wednesday|thursday|friday|saturday|sunday|jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec|\d{1,2}\/\d{1,2}\/\d{2,4})/i
+const PURE_TIME_RE     = /^\s*\d{1,2}:\d{2}\s*(?:am|pm)?\s*$/i
+const SHORT_HEADER_RE  = /^\s*(?:read|delivered|sent)\s*$/i
+
+function isImessageMetaLine(line) {
+  const t = line.trim()
+  if (!t) return true
+  if (PURE_TIME_RE.test(t)) return true
+  if (SHORT_HEADER_RE.test(t)) return true
+  if (IMESSAGE_TIME_RE.test(t) && t.length < 40) return true
+  return false
+}
+
+export function parseRaw(text) {
+  // Try WhatsApp format first — if it returns anything, use that
+  const wa = parseWhatsApp(text)
+  if (wa.length > 0) return { kind: 'whatsapp', messages: wa }
+
+  // Otherwise fall back to alternating-line iMessage paste
+  const lines = text.split(/\r?\n/)
+  const messages = []
+  let alt = 0   // 0 = sender1, 1 = sender2
+  const baseDate = new Date()
+  let idx = 0
+  for (const raw of lines) {
+    const line = raw.trim()
+    if (!line) continue
+    if (isImessageMetaLine(line)) continue
+    // Treat each non-meta line as a message
+    messages.push({
+      date: new Date(baseDate.getTime() + idx * 1000),
+      sender: alt === 0 ? 'Sender 1' : 'Sender 2',
+      body: line,
+    })
+    alt = 1 - alt
+    idx += 1
+  }
+  return { kind: 'paste', messages }
+}
+
+// Flip the alternating-sender assumption (used when user says "actually I'm the
+// other side" in the picker step).
+export function flipAlternating(messages) {
+  return messages.map(m => ({
+    ...m,
+    sender: m.sender === 'Sender 1' ? 'Sender 2' : 'Sender 1',
+  }))
+}
+
 // Once we have messages, identify the two participants. Returns { me, them }
 // based on which sender appears most often + their relative message lengths.
 // In v1 we ask the user to confirm which one is them.
