@@ -1,4 +1,4 @@
-# DM Decoder
+# Receipts
 
 > An honest read of your texts. Six lenses. No bullshit.
 
@@ -40,8 +40,8 @@ On WhatsApp (iOS or Android):
 - After analysis, names are substituted back **on the client** for display
 
 ## Roadmap
-- [x] v0.1: WhatsApp upload, redact, decode, copy
+- [x] v0.1: WhatsApp upload, redact, read, copy
 - [ ] iMessage support (Mac SQLite export → upload)
-- [ ] Stripe pay-per-decode ($9 standard / $19 deep / $49 Opus)
+- [ ] Stripe pay-per-read ($9 standard / $19 deep / $49 Opus)
 - [ ] "Watch this situationship" subscription (monthly re-runs)
 - [ ] Shareable verdict cards

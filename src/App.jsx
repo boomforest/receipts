@@ -88,8 +88,8 @@ export default function App() {
 
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '2.5rem' }}>
           <div onClick={reset} style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
-            <div style={{ width: 36, height: 36, borderRadius: '50%', background: BRAND.gradient, display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 900, fontSize: 11, color: '#fff' }}>DM</div>
-            <span style={{ fontWeight: 800, fontSize: '0.95rem', letterSpacing: '-0.01em' }}>DM Decoder</span>
+            <div style={{ width: 36, height: 36, borderRadius: '50%', background: BRAND.gradient, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18 }}>🧾</div>
+            <span style={{ fontWeight: 800, fontSize: '0.95rem', letterSpacing: '-0.01em' }}>Receipts</span>
           </div>
           <span style={{ fontSize: '0.7rem', color: C.textMid, border: `1px solid ${C.border}`, borderRadius: 99, padding: '0.2rem 0.6rem' }}>v0.1 · beta</span>
         </div>
@@ -216,7 +216,7 @@ function Preview({ redaction, onAnalyze, onBack }) {
           flex: 2, background: BRAND.gradient, color: '#000', border: 'none', borderRadius: 10,
           padding: '0.95rem', fontWeight: 800, fontSize: '0.95rem', cursor: 'pointer', fontFamily: FONT,
         }}>
-          Decode →
+          Get the Receipts →
         </button>
       </div>
     </div>
@@ -242,7 +242,7 @@ function Result({ analysis, redaction, themSender, onReset }) {
 
   return (
     <div>
-      <Eyebrow color={BRAND.neon}>The Decode</Eyebrow>
+      <Eyebrow color={BRAND.neon}>The Receipts</Eyebrow>
       <div style={{ marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
         <span style={{ color: C.textMid, fontSize: '0.85rem' }}>Show their name as:</span>
         <input
@@ -267,7 +267,7 @@ function Result({ analysis, redaction, themSender, onReset }) {
           flex: 1, background: BRAND.gradient, color: '#000', border: 'none', borderRadius: 10,
           padding: '0.85rem', fontWeight: 800, fontSize: '0.88rem', cursor: 'pointer', fontFamily: FONT,
         }}>
-          Decode another
+          Run another
         </button>
       </div>
     </div>
