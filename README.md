@@ -1,6 +1,8 @@
 # Receipts
 
 > An honest read of your texts. Six lenses. No bullshit.
+>
+> Live at **[receipts.mx](https://receipts.mx)**
 
 Drag in a WhatsApp .txt export → get a sharp, evidence-cited analysis of the relationship dynamic. Names and numbers are stripped client-side before anything leaves the browser.
 
