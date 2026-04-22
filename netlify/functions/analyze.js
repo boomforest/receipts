@@ -82,8 +82,8 @@ Now apply the 6-lens framework. Be honest.`
         'anthropic-version': '2023-06-01',
       },
       body: JSON.stringify({
-        model:      'claude-sonnet-4-5-20250929',
-        max_tokens: 2000,
+        model:      'claude-haiku-4-5',
+        max_tokens: 800,
         system: [
           {
             type: 'text',
