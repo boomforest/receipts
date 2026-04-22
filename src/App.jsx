@@ -207,7 +207,7 @@ export default function App() {
           opacity: 0.85,
         }}>
           <span style={{ fontSize: '0.9rem' }}>{GRAIL.dove}</span>
-          <span>Powered by the Grail Protocol</span>
+          <span>Powered by Grail Protocol</span>
         </a>
       </div>
 

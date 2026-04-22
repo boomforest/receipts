@@ -129,7 +129,7 @@ export default function SignIn({ onClose, onSuccess }) {
         </div>
 
         <div style={{ marginTop: '1rem', paddingTop: '0.85rem', borderTop: `1px solid ${C.border}`, position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.4rem', fontSize: '0.68rem', color: GRAIL.gold, letterSpacing: '0.1em', fontWeight: 700, textTransform: 'uppercase' }}>
-          <span>{GRAIL.dove}</span> Powered by the Grail Protocol
+          <span>{GRAIL.dove}</span> Powered by Grail Protocol
         </div>
       </div>
     </div>
