@@ -236,11 +236,12 @@ exports.handler = async (event) => {
     }
 
     // Effective tier:
-    //   - If a valid signed-in user is present → grant 'standard' (Sonnet + full prompt)
-    //     while the launch promo runs. Cheaper than Opus, still full Deep Read.
+    //   - F&F beta: signed-in users get the Cadillac (Opus + full prompt)
+    //     for max-quality feedback. ~30 testers × ~5 reads × \$0.30 = ~\$45.
+    //   - When the beta opens up to public scale, swap 'deep' → 'standard'.
     //   - Otherwise honor the requested tier if known, default to 'free'.
     let tier = TIERS[rawTier] ? rawTier : 'free'
-    if (promoUser && (tier === 'free')) tier = 'standard'
+    if (promoUser && (tier === 'free')) tier = 'deep'
     const config = TIERS[tier]
 
     const apiKey = process.env.ANTHROPIC_API_KEY
