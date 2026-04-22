@@ -39,9 +39,10 @@ export function redact(messages, meSender) {
     const others = [...new Set(messages.map(m => m.sender))].filter(s => s !== meSender)
     return others[0] || 'Other'
   })()
+  // Use unambiguous markers — model can't accidentally flip "YOU" and "THEM"
   const senderMap = new Map([
-    [meSender, 'Person A (me)'],
-    [themSender, 'Person B (them)'],
+    [meSender, 'YOU'],
+    [themSender, 'THEM'],
   ])
 
   // First pass: collect candidate third-party names from message bodies
@@ -98,17 +99,24 @@ function escapeRegex(s) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
-// Reverse pass — used on the LLM's response to swap [NAME-N] back to real names
-// for display only. Sender map is also reversed so 'Person B (them)' → 'Kat'.
+// Reverse pass — substitute real names back into the LLM's response for display.
+// Replaces:
+//   - [NAME-N]      → original third-party first name
+//   - [PERSON]      → user-chosen display name for the other party (the prompt
+//                     asks the model to use [PERSON] when referring to them)
+//   - THEM / YOU    → display name / "you" (fallback if model uses raw markers)
 export function unredact(text, redactionResult, displayThemAs) {
   let out = text
   for (const [name, token] of redactionResult.nameMap) {
     out = out.replace(new RegExp(escapeRegex(token), 'g'), name)
   }
   if (displayThemAs) {
-    out = out.replace(/Person B \(them\)/g, displayThemAs)
-    out = out.replace(/Person B/g, displayThemAs)
+    // Preferred: model wrote [PERSON]
+    out = out.replace(/\[PERSON\]/g, displayThemAs)
+    // Fallback: model still wrote raw THEM/YOU markers
+    out = out.replace(/\bTHEM\b/g, displayThemAs)
   }
+  out = out.replace(/\bYOU\b/g, 'you')
   return out
 }
 
