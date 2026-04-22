@@ -20,4 +20,15 @@ export const BRAND = {
   neon:     '#aaff00',
 }
 
+// Grail Protocol — the parent family. Used for cross-product branding
+// (sign in, watermarks, "powered by"). Gold tones so it's distinct from
+// Receipts' main pink/orange palette without clashing.
+export const GRAIL = {
+  gold:     '#e8b84b',
+  goldDim:  '#c8922a',
+  goldDeep: '#6b4a14',
+  dove:     '🕊',
+  gradient: 'linear-gradient(135deg, #c8922a 0%, #e8b84b 100%)',
+}
+
 export const FONT = '-apple-system, system-ui, sans-serif'

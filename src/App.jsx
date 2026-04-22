@@ -3,7 +3,7 @@ import { parseWhatsApp, parseRaw, flipAlternating, summarize } from './parser'
 import { redact, unredact, buildPayload } from './redact'
 import { supabase, authEnabled } from './supabase'
 import SignIn from './SignIn'
-import { C, BRAND, FONT } from './theme'
+import { C, BRAND, GRAIL, FONT } from './theme'
 
 export default function App() {
   const [stage, setStage]       = useState('upload')   // upload | pickme | preview | analyzing | result | error
@@ -158,8 +158,14 @@ export default function App() {
           {authEnabled && (
             session ? (
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                <span style={{ fontSize: '0.72rem', color: BRAND.neon, border: `1px solid ${BRAND.neon}55`, borderRadius: 99, padding: '0.2rem 0.55rem', fontWeight: 700, letterSpacing: '0.04em' }}>
-                  Deep Read unlocked
+                <span style={{
+                  display: 'inline-flex', alignItems: 'center', gap: '0.35rem',
+                  fontSize: '0.7rem', color: GRAIL.gold,
+                  border: `1px solid ${GRAIL.gold}55`, background: `${GRAIL.gold}10`,
+                  borderRadius: 99, padding: '0.22rem 0.6rem',
+                  fontWeight: 800, letterSpacing: '0.06em', textTransform: 'uppercase',
+                }}>
+                  <span style={{ fontSize: '0.85rem' }}>{GRAIL.dove}</span> Deep Read unlocked
                 </span>
                 <button onClick={signOut} style={{
                   background: 'transparent', border: `1px solid ${C.border}`, color: C.textMid,
@@ -168,10 +174,13 @@ export default function App() {
               </div>
             ) : (
               <button onClick={() => setSignInOpen(true)} style={{
-                background: BRAND.gradient, color: '#000', border: 'none',
-                borderRadius: 99, padding: '0.35rem 0.95rem', fontSize: '0.78rem', fontWeight: 800, cursor: 'pointer', fontFamily: FONT,
+                display: 'inline-flex', alignItems: 'center', gap: '0.45rem',
+                background: GRAIL.gradient, color: '#000', border: 'none',
+                borderRadius: 99, padding: '0.4rem 0.95rem', fontSize: '0.78rem', fontWeight: 800,
+                cursor: 'pointer', fontFamily: FONT,
+                boxShadow: `0 0 18px ${GRAIL.gold}33`,
               }}>
-                Sign in · Free Deep Read
+                <span style={{ fontSize: '0.95rem' }}>{GRAIL.dove}</span> Sign in with Grail
               </button>
             )
           )}
@@ -189,6 +198,17 @@ export default function App() {
           Anthropic processes the redacted text under a zero-retention contract.<br />
           We never see your messages and never store them.
         </div>
+
+        {/* Grail Protocol watermark */}
+        <a href="https://grail.mx" target="_blank" rel="noopener" style={{
+          display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.45rem',
+          marginTop: '2rem', textDecoration: 'none',
+          fontSize: '0.68rem', color: GRAIL.goldDim, letterSpacing: '0.18em', fontWeight: 700, textTransform: 'uppercase',
+          opacity: 0.85,
+        }}>
+          <span style={{ fontSize: '0.9rem' }}>{GRAIL.dove}</span>
+          <span>Powered by the Grail Protocol</span>
+        </a>
       </div>
 
       {signInOpen && (
@@ -483,16 +503,24 @@ function Result({ analysis, redaction, themSender, onReset, tier, onSignIn }) {
   const final = unredact(analysis, redaction, displayName)
 
   const tierLabel = {
-    free:     { label: 'Quick Read · Free',         color: C.textMid },
-    standard: { label: 'Deep Read · Standard',      color: BRAND.neon },
-    deep:     { label: 'Deepest Read · Premium',    color: BRAND.neon },
-  }[tier] || { label: 'Quick Read', color: C.textMid }
+    free:     { label: 'Quick Read · Free',           color: C.textMid, dove: false },
+    standard: { label: 'Deep Read · via Grail',       color: GRAIL.gold, dove: true },
+    deep:     { label: 'Deepest Read · via Grail',    color: GRAIL.gold, dove: true },
+  }[tier] || { label: 'Quick Read', color: C.textMid, dove: false }
 
   return (
     <div>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.75rem', flexWrap: 'wrap', gap: '0.5rem' }}>
         <Eyebrow color={BRAND.neon}>The Receipts</Eyebrow>
-        <span style={{ fontSize: '0.65rem', color: tierLabel.color, border: `1px solid ${tierLabel.color}55`, borderRadius: 99, padding: '0.18rem 0.6rem', fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase' }}>
+        <span style={{
+          display: 'inline-flex', alignItems: 'center', gap: '0.3rem',
+          fontSize: '0.65rem', color: tierLabel.color,
+          border: `1px solid ${tierLabel.color}55`,
+          background: tierLabel.dove ? `${GRAIL.gold}10` : 'transparent',
+          borderRadius: 99, padding: '0.18rem 0.6rem',
+          fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase',
+        }}>
+          {tierLabel.dove && <span style={{ fontSize: '0.85rem' }}>{GRAIL.dove}</span>}
           {tierLabel.label}
         </span>
       </div>
@@ -616,14 +644,17 @@ function UpgradeCard({ onSignIn }) {
         {authEnabled ? (
           <>
             <button onClick={onSignIn} style={{
-              width: '100%', background: BRAND.gradient, color: '#000', border: 'none', borderRadius: 12,
+              display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem',
+              width: '100%', background: GRAIL.gradient, color: '#000', border: 'none', borderRadius: 12,
               padding: '0.95rem', fontSize: '0.95rem', fontWeight: 800, cursor: 'pointer',
               fontFamily: FONT, letterSpacing: '0.01em',
+              boxShadow: `0 0 24px ${GRAIL.gold}33`,
             }}>
-              Get the Deep Read · Free during launch →
+              <span style={{ fontSize: '1.05rem' }}>{GRAIL.dove}</span>
+              Sign in with Grail · Free Deep Read
             </button>
-            <div style={{ textAlign: 'center', color: BRAND.neon, fontSize: '0.72rem', marginTop: '0.6rem', fontWeight: 700, letterSpacing: '0.04em' }}>
-              SIGN UP WITH GRAIL · NO CARD · LIMITED TIME
+            <div style={{ textAlign: 'center', color: GRAIL.gold, fontSize: '0.72rem', marginTop: '0.6rem', fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase' }}>
+              Beta · No card · Limited time
             </div>
           </>
         ) : (

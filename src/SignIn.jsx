@@ -1,6 +1,6 @@
 import React, { useState } from 'react'
 import { supabase } from './supabase'
-import { C, BRAND, FONT } from './theme'
+import { C, BRAND, GRAIL, FONT } from './theme'
 
 // Single modal that handles both sign-in and sign-up. The same Supabase
 // project that runs Grail backs this — one account works across both.
@@ -49,24 +49,46 @@ export default function SignIn({ onClose, onSuccess }) {
       <div onClick={e => e.stopPropagation()} style={{
         background: C.surface, border: `1px solid ${C.border}`,
         borderRadius: 18, padding: '2rem 1.75rem', maxWidth: 380, width: '100%',
-        position: 'relative',
+        position: 'relative', overflow: 'hidden',
       }}>
+        {/* Subtle Grail-gold glow at the top */}
+        <div style={{
+          position: 'absolute', top: -80, left: '50%', transform: 'translateX(-50%)',
+          width: 280, height: 200, pointerEvents: 'none',
+          background: `radial-gradient(ellipse, ${GRAIL.gold}22 0%, transparent 65%)`,
+        }} />
+
         <button onClick={onClose} style={{
           position: 'absolute', top: 12, right: 14, background: 'transparent',
-          border: 'none', color: C.textMid, fontSize: '1.4rem', cursor: 'pointer', lineHeight: 1,
+          border: 'none', color: C.textMid, fontSize: '1.4rem', cursor: 'pointer', lineHeight: 1, zIndex: 2,
         }}>×</button>
 
-        <div style={{ fontSize: '0.7rem', color: BRAND.neon, textTransform: 'uppercase', letterSpacing: '0.15em', fontWeight: 700, marginBottom: '0.5rem' }}>
-          Limited launch promo
+        {/* Grail mark + protocol attribution */}
+        <div style={{ position: 'relative', display: 'flex', alignItems: 'center', gap: '0.55rem', marginBottom: '1.25rem' }}>
+          <div style={{
+            width: 36, height: 36, borderRadius: '50%',
+            background: GRAIL.gradient,
+            display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18,
+            boxShadow: `0 0 20px ${GRAIL.gold}33`,
+          }}>{GRAIL.dove}</div>
+          <div>
+            <div style={{ fontSize: '0.62rem', color: GRAIL.gold, textTransform: 'uppercase', letterSpacing: '0.18em', fontWeight: 800 }}>
+              Grail Protocol
+            </div>
+            <div style={{ fontSize: '0.92rem', color: C.text, fontWeight: 700, marginTop: 1 }}>
+              {mode === 'signin' ? 'Sign in with Grail' : 'Sign up with Grail'}
+            </div>
+          </div>
         </div>
-        <div style={{ color: C.text, fontSize: '1.3rem', fontWeight: 900, letterSpacing: '-0.02em', lineHeight: 1.25, marginBottom: '0.6rem' }}>
-          Sign up free.<br/>
+
+        <div style={{ position: 'relative', color: C.text, fontSize: '1.15rem', fontWeight: 900, letterSpacing: '-0.02em', lineHeight: 1.3, marginBottom: '0.6rem' }}>
+          One account.<br/>
           <span style={{ background: BRAND.gradient, WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>
-            Get the Deep Read on us.
+            The whole Protocol.
           </span>
         </div>
-        <div style={{ color: C.textMid, fontSize: '0.85rem', lineHeight: 1.6, marginBottom: '1.4rem' }}>
-          One account works across Receipts and <a href="https://grail.mx" target="_blank" rel="noopener" style={{ color: BRAND.pink, textDecoration: 'none', fontWeight: 700 }}>Grail.mx</a>. While the promo runs, signed-in users get the full Deep Read free on every chat they upload.
+        <div style={{ position: 'relative', color: C.textMid, fontSize: '0.83rem', lineHeight: 1.6, marginBottom: '1.4rem' }}>
+          Your Grail account works on Receipts, <a href="https://grail.mx" target="_blank" rel="noopener" style={{ color: GRAIL.gold, textDecoration: 'none', fontWeight: 700 }}>grail.mx</a>, and every product in the Protocol family. Beta users get the Deep Read free on every chat.
         </div>
 
         <div style={{ display: 'flex', gap: '0.4rem', marginBottom: '1rem', background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: '0.25rem' }}>
@@ -104,6 +126,10 @@ export default function SignIn({ onClose, onSuccess }) {
 
         <div style={{ marginTop: '1rem', textAlign: 'center', fontSize: '0.72rem', color: C.textDim }}>
           Same privacy on both sides. We never see your texts.
+        </div>
+
+        <div style={{ marginTop: '1rem', paddingTop: '0.85rem', borderTop: `1px solid ${C.border}`, position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.4rem', fontSize: '0.68rem', color: GRAIL.gold, letterSpacing: '0.1em', fontWeight: 700, textTransform: 'uppercase' }}>
+          <span>{GRAIL.dove}</span> Powered by the Grail Protocol
         </div>
       </div>
     </div>
