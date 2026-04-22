@@ -218,7 +218,7 @@ exports.handler = async (event) => {
     if (!chat || typeof chat !== 'string') throw new Error('chat (string) required')
     if (chat.length > 200000) throw new Error('Chat too long. Try a shorter export (last 6 months).')
 
-    // ── Auth check (launch promo: signed-in users get the Deep Read free) ──
+    // ── Auth check (signed-in Grail users may have Deep Read tokens) ──
     let promoUser = null
     const authHeader = event.headers.authorization || event.headers.Authorization
     const accessToken = authHeader && authHeader.replace(/^Bearer\s+/i, '')
@@ -235,13 +235,48 @@ exports.handler = async (event) => {
       }
     }
 
+    // ── Deep Read token ledger ──
+    // Every Grail account gets 1 free Deep Read on Receipts. Auto-granted
+    // on first request via service-role insert. Atomically decremented
+    // here BEFORE running the analysis so a failed analysis doesn't burn
+    // the token (we'll refund if needed).
+    let tokensRemaining = null
+    let consumedToken = false
+    let serviceClient = null
+    if (promoUser && process.env.SUPABASE_SERVICE_ROLE_KEY) {
+      const { createClient } = require('@supabase/supabase-js')
+      serviceClient = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, {
+        auth: { persistSession: false },
+      })
+
+      // Read current balance
+      let { data: credits } = await serviceClient
+        .from('receipts_credits')
+        .select('deep_tokens')
+        .eq('user_id', promoUser.id)
+        .maybeSingle()
+
+      // First-time signed-in user → grant 1 token (idempotent on conflict)
+      if (!credits) {
+        const { data: inserted } = await serviceClient
+          .from('receipts_credits')
+          .insert({ user_id: promoUser.id, deep_tokens: 1 })
+          .select('deep_tokens')
+          .single()
+        credits = inserted || { deep_tokens: 1 }
+      }
+      tokensRemaining = credits?.deep_tokens ?? 0
+    }
+
     // Effective tier:
-    //   - F&F beta: signed-in users get the Cadillac (Opus + full prompt)
-    //     for max-quality feedback. ~30 testers × ~5 reads × \$0.30 = ~\$45.
-    //   - When the beta opens up to public scale, swap 'deep' → 'standard'.
-    //   - Otherwise honor the requested tier if known, default to 'free'.
+    //   - Signed-in user with token > 0 + asked for free → upgrade to 'deep' and consume
+    //   - Otherwise honor the requested tier if known, default to 'free'
+    //   - Anyone can still explicitly request 'standard' / 'deep' (Stripe gating later)
     let tier = TIERS[rawTier] ? rawTier : 'free'
-    if (promoUser && (tier === 'free')) tier = 'deep'
+    if (promoUser && tier === 'free' && tokensRemaining > 0) {
+      tier = 'deep'
+      consumedToken = true
+    }
     const config = TIERS[tier]
 
     const apiKey = process.env.ANTHROPIC_API_KEY
@@ -298,14 +333,32 @@ Now apply the 6-lens framework. Be calibrated — read what's actually there, bo
 
     if (!analysis) throw new Error('Empty response from model')
 
+    // Successful analysis — burn the Deep Read token if we used one
+    if (consumedToken && serviceClient) {
+      try {
+        await serviceClient
+          .from('receipts_credits')
+          .update({
+            deep_tokens: Math.max(0, tokensRemaining - 1),
+            used_at:     new Date().toISOString(),
+            updated_at:  new Date().toISOString(),
+          })
+          .eq('user_id', promoUser.id)
+        tokensRemaining = Math.max(0, tokensRemaining - 1)
+      } catch (decErr) {
+        console.warn('Token decrement failed (analysis still returned):', decErr.message)
+      }
+    }
+
     return {
       statusCode: 200,
       body: JSON.stringify({
         analysis,
         tier,
-        model: config.model,
-        promo: !!promoUser,
-        usage: json.usage,
+        model:            config.model,
+        promo:            !!promoUser,
+        tokens_remaining: tokensRemaining,
+        usage:            json.usage,
       }),
     }
   } catch (err) {

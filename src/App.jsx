@@ -24,6 +24,7 @@ export default function App() {
   const [usedTier, setUsedTier] = useState('')        // tier the server actually ran
   const [session, setSession]   = useState(null)
   const [signInOpen, setSignInOpen] = useState(false)
+  const [tokensRemaining, setTokensRemaining] = useState(null)
 
   // Track Supabase auth session
   useEffect(() => {
@@ -33,15 +34,38 @@ export default function App() {
     return () => subscription?.unsubscribe()
   }, [])
 
-  // Signed-in users get the Deep Read free during the launch promo.
-  // The server is the source of truth — if the JWT validates and the user
-  // is in the Grail database, the backend grants tier=deep.
-  const requestedTier = session ? 'deep' : tier
+  // When session changes, fetch the user's Deep Read token balance.
+  // RLS allows users to read their own row only. If no row yet, the
+  // backend will auto-grant 1 token on the first analyze call — show
+  // the optimistic '1' until then.
+  useEffect(() => {
+    if (!session?.user?.id || !supabase) {
+      setTokensRemaining(null)
+      return
+    }
+    let cancelled = false
+    ;(async () => {
+      const { data } = await supabase
+        .from('receipts_credits')
+        .select('deep_tokens')
+        .eq('user_id', session.user.id)
+        .maybeSingle()
+      if (!cancelled) setTokensRemaining(data?.deep_tokens ?? 1)  // optimistic 1 for new users
+    })()
+    return () => { cancelled = true }
+  }, [session])
+
+  // Effective tier requested:
+  // - Signed-in user with a token → request 'free' (server upgrades to 'deep' and consumes)
+  // - Signed-in but tokens=0 → request 'free' (server returns free)
+  // - Anon → use whatever was set (URL override or 'free')
+  const requestedTier = session ? 'free' : tier
 
   const signOut = async () => {
     if (!supabase) return
     await supabase.auth.signOut()
     setSession(null)
+    setTokensRemaining(null)
   }
 
   const reset = () => {
@@ -137,6 +161,7 @@ export default function App() {
       if (!res.ok) throw new Error(json.error || 'Analysis failed')
       setAnalysis(json.analysis)
       setUsedTier(json.tier || requestedTier)
+      if (typeof json.tokens_remaining === 'number') setTokensRemaining(json.tokens_remaining)
       setStage('result')
     } catch (e) {
       setError(e.message)
@@ -158,15 +183,27 @@ export default function App() {
           {authEnabled && (
             session ? (
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                <span style={{
-                  display: 'inline-flex', alignItems: 'center', gap: '0.35rem',
-                  fontSize: '0.7rem', color: GRAIL.gold,
-                  border: `1px solid ${GRAIL.gold}55`, background: `${GRAIL.gold}10`,
-                  borderRadius: 99, padding: '0.22rem 0.6rem',
-                  fontWeight: 800, letterSpacing: '0.06em', textTransform: 'uppercase',
-                }}>
-                  <span style={{ fontSize: '0.85rem' }}>{GRAIL.dove}</span> Deep Read unlocked
-                </span>
+                {tokensRemaining > 0 ? (
+                  <span style={{
+                    display: 'inline-flex', alignItems: 'center', gap: '0.35rem',
+                    fontSize: '0.7rem', color: GRAIL.gold,
+                    border: `1px solid ${GRAIL.gold}55`, background: `${GRAIL.gold}10`,
+                    borderRadius: 99, padding: '0.22rem 0.6rem',
+                    fontWeight: 800, letterSpacing: '0.06em', textTransform: 'uppercase',
+                  }}>
+                    <span style={{ fontSize: '0.85rem' }}>{GRAIL.dove}</span>
+                    {tokensRemaining} Deep Read{tokensRemaining === 1 ? '' : 's'} left
+                  </span>
+                ) : (
+                  <span style={{
+                    fontSize: '0.7rem', color: C.textMid,
+                    border: `1px solid ${C.border}`,
+                    borderRadius: 99, padding: '0.22rem 0.6rem',
+                    fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase',
+                  }}>
+                    Deep Read used
+                  </span>
+                )}
                 <button onClick={signOut} style={{
                   background: 'transparent', border: `1px solid ${C.border}`, color: C.textMid,
                   borderRadius: 99, padding: '0.25rem 0.65rem', fontSize: '0.72rem', cursor: 'pointer', fontFamily: FONT,
@@ -190,7 +227,7 @@ export default function App() {
         {stage === 'pickme'    && <PickMe summary={summary} meSender={meSender} setMeSender={setMeSender} onNext={goPreview} sourceKind={sourceKind} onFlip={flipMeAssignment} />}
         {stage === 'preview'   && <Preview redaction={redaction} onAnalyze={analyze} onBack={() => setStage('pickme')} />}
         {stage === 'analyzing' && <Analyzing />}
-        {stage === 'result'    && <Result analysis={analysis} redaction={redaction} themSender={redaction.themSender} onReset={reset} tier={usedTier} onSignIn={() => setSignInOpen(true)} />}
+        {stage === 'result'    && <Result analysis={analysis} redaction={redaction} themSender={redaction.themSender} onReset={reset} tier={usedTier} onSignIn={() => setSignInOpen(true)} signedIn={!!session} tokensRemaining={tokensRemaining} />}
         {stage === 'error'     && <ErrorView error={error} onReset={reset} />}
 
         <div style={{ marginTop: '4rem', textAlign: 'center', color: C.textDim, fontSize: '0.72rem', letterSpacing: '0.04em', lineHeight: 1.7 }}>
@@ -498,7 +535,7 @@ function Analyzing() {
 }
 
 // ─── RESULT ───────────────────────────────────────────────────────────────────
-function Result({ analysis, redaction, themSender, onReset, tier, onSignIn }) {
+function Result({ analysis, redaction, themSender, onReset, tier, onSignIn, signedIn, tokensRemaining }) {
   const [displayName, setDisplayName] = React.useState(themSender)
   const final = unredact(analysis, redaction, displayName)
 
@@ -538,7 +575,7 @@ function Result({ analysis, redaction, themSender, onReset, tier, onSignIn }) {
         {final}
       </div>
 
-      {tier === 'free' && <UpgradeCard onSignIn={() => onSignIn()} />}
+      {tier === 'free' && <UpgradeCard onSignIn={() => onSignIn()} onReset={onReset} signedIn={signedIn} tokensRemaining={tokensRemaining} />}
 
       <div style={{ display: 'flex', gap: '0.6rem', marginTop: '1.25rem' }}>
         <button onClick={() => navigator.clipboard?.writeText(final)} style={{
@@ -574,7 +611,12 @@ function ErrorView({ error, onReset }) {
 
 // ─── UPGRADE CARD ─────────────────────────────────────────────────────────────
 // The scintillating upsell. Sits below every free read.
-function UpgradeCard({ onSignIn }) {
+// Three states:
+//   1. Anon  → "Sign in with Grail" gold CTA
+//   2. Signed in, tokens > 0 → shouldn't usually happen here (server would've
+//      upgraded), but if it does, just nudge to use it next time
+//   3. Signed in, tokens = 0 → standard "Get the Deep Read · $19" coming-soon
+function UpgradeCard({ onSignIn, onReset, signedIn, tokensRemaining }) {
   const layers = [
     { icon: '💞', label: 'Attachment style' },
     { icon: '🧠', label: 'Myers-Briggs / Enneagram' },
@@ -640,8 +682,8 @@ function UpgradeCard({ onSignIn }) {
           </div>
         </div>
 
-        {/* Launch promo CTA — sign in via Grail for free Deep Read */}
-        {authEnabled ? (
+        {/* Three states: anon promo / signed in with tokens / signed in tokens=0 */}
+        {authEnabled && !signedIn && (
           <>
             <button onClick={onSignIn} style={{
               display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem',
@@ -651,13 +693,33 @@ function UpgradeCard({ onSignIn }) {
               boxShadow: `0 0 24px ${GRAIL.gold}33`,
             }}>
               <span style={{ fontSize: '1.05rem' }}>{GRAIL.dove}</span>
-              Sign in with Grail · Free Deep Read
+              Sign in with Grail · 1 Free Deep Read
             </button>
             <div style={{ textAlign: 'center', color: GRAIL.gold, fontSize: '0.72rem', marginTop: '0.6rem', fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase' }}>
-              Beta · No card · Limited time
+              Every Grail account gets one. No card.
             </div>
           </>
-        ) : (
+        )}
+
+        {authEnabled && signedIn && tokensRemaining > 0 && (
+          <>
+            <button onClick={onReset} style={{
+              display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem',
+              width: '100%', background: GRAIL.gradient, color: '#000', border: 'none', borderRadius: 12,
+              padding: '0.95rem', fontSize: '0.95rem', fontWeight: 800, cursor: 'pointer',
+              fontFamily: FONT, letterSpacing: '0.01em',
+              boxShadow: `0 0 24px ${GRAIL.gold}33`,
+            }}>
+              <span style={{ fontSize: '1.05rem' }}>{GRAIL.dove}</span>
+              Use your Free Deep Read on a chat
+            </button>
+            <div style={{ textAlign: 'center', color: GRAIL.gold, fontSize: '0.72rem', marginTop: '0.6rem', fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase' }}>
+              {tokensRemaining} Deep Read{tokensRemaining === 1 ? '' : 's'} left in your account
+            </div>
+          </>
+        )}
+
+        {(!authEnabled || (signedIn && tokensRemaining === 0)) && (
           <>
             <button disabled style={{
               width: '100%', background: BRAND.gradient, color: '#000', border: 'none', borderRadius: 12,
@@ -667,7 +729,9 @@ function UpgradeCard({ onSignIn }) {
               Get the Deep Read · $19 — coming soon
             </button>
             <div style={{ textAlign: 'center', color: C.textDim, fontSize: '0.72rem', marginTop: '0.6rem' }}>
-              Same privacy. Same redaction. Way more depth.
+              {signedIn && tokensRemaining === 0
+                ? 'You\'ve used your free Deep Read. Paid reads coming soon.'
+                : 'Same privacy. Same redaction. Way more depth.'}
             </div>
           </>
         )}

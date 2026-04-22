@@ -27,8 +27,11 @@ npx netlify dev      # full stack at :8888
 
 Server-side (functions only):
 - `ANTHROPIC_API_KEY` — your Anthropic key
-- `SUPABASE_URL` — same project as Grail (for auth promo)
+- `SUPABASE_URL` — same project as Grail (for auth + token ledger)
 - `SUPABASE_ANON_KEY` — Grail's Supabase anon key (used to verify JWTs)
+- `SUPABASE_SERVICE_ROLE_KEY` — Grail's Supabase service-role secret
+  (used by analyze.js to grant + decrement Deep Read tokens; never
+  ship to the client)
 
 Client-side (build time, prefixed with `VITE_`):
 - `VITE_SUPABASE_URL` — same value as `SUPABASE_URL`
