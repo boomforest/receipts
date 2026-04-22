@@ -29,21 +29,24 @@ Apply 6 lenses, briefly:
 5. ASKS — practical, emotional, or curious about you
 6. RECIPROCITY — what THEM gives back
 
-Output (markdown, no preamble, max 250 words total):
+Output (markdown, no preamble, max 220 words total):
 
 **The Verdict**
 ONE clear sentence. Match the evidence — could be "[PERSON] is into you and you're reading them right" OR "Mixed — real warmth, real distance" OR "[PERSON] isn't pursuing this." Pick the truest, not the gloomiest.
 
 **Quick Read**
-2-3 short paragraphs. Cite 2-3 dated quotes as evidence. Cover the strongest signals across the 6 lenses.
+2 short paragraphs. Cite 2-3 dated quotes as evidence. Cover the strongest signals.
 
 **One Move**
-One specific, actionable thing to do.
+One specific, actionable thing to do this week.
 
-End with this exact line:
-*This is a quick read. The Deep Read uses better models and applies attachment-style analysis, Gottman patterns, and the full expert framework — upgrade for the full picture.*
+**Leverage Points**
+End with EXACTLY this line, filled in with what you actually saw in the chat:
+*"There are [N] specific moments in this chat where the dynamic could pivot — the Deep Read maps each one, names the patterns at play, and gives you the full playbook."*
 
-Rules: be calibrated, quote dated lines, 250 words max.`
+Where [N] is your honest count of inflection points you noticed (usually 2-4). This isn't fluff — actually count them.
+
+Rules: be calibrated, quote dated lines, 220 words max.`
 
 // ─── FULL PROMPT (paid tiers — Sonnet/Opus) ──────────────────────────────────
 // Includes the complete expert grounding (Gottman, Sue Johnson, Perel,
@@ -82,27 +85,39 @@ ONE clear sentence. Pick the verdict the evidence supports. Examples of valid re
 - "[PERSON] is not pursuing this and the evidence is clear."
 Don't pick the gloomiest verdict to seem insightful. Pick the truest one.
 
-**The Receipts**
-For each of the 6 lenses, 2-3 sentences with one or two short dated quoted snippets. Cite WARMTH where it exists. Cite DISTANCE where it exists. Both/and, not either/or.
+**What's Happening**
+2-3 paragraphs. The actual read of the dynamic, with cited dated quotes. Cite WARMTH where it exists, DISTANCE where it exists. Apply the 6-lens framework here in narrative form — don't list the lenses, weave them into the read.
 
-**The Honest Read**
-- Romantic intent from [PERSON]: Strong / Real / Mixed / Weak / None — with reasoning
-- Dynamic balance: mutual / leaning your way / leaning their way / lopsided
-- Are you reading the situation accurately? Yes / Mostly / Partially / No — name what you might be MISSING (signs of warmth) OR over-projecting (manufactured distance). It's bidirectional.
+**Your Role**
+What YOU did that shaped this dynamic. Quote specific moments where you over-pursued, were overly available, ignored bids THEM was making back, anxiously read silence as rejection, escalated too fast, or avoided showing real interest. This is NOT moralizing — it's pattern-mapping. People can't change what they don't see. 2-3 paragraphs with quoted evidence. If your role is mostly fine, say so honestly — don't manufacture a flaw.
 
-**What I'd actually do**
-2-3 specific moves. The recommendation should match the verdict:
-- If they're into you → "ask them out for [specific], stop second-guessing"
-- If it's mixed → "name the ambiguity directly, see how they react"
-- If they're not pursuing → "stop investing free labor, see if they create space when you stop"
-End with one direct sentence.
+**Their Pattern**
+What's actually driving THEM's behavior. Cite attachment markers (avoidant, anxious, secure), recurring patterns, what their actions actually MEAN. Avoidance ≠ disinterest. Busy ≠ rejection. Pet names without follow-through ≠ love. Translate the surface behavior into the underlying drive. 2-3 paragraphs with quoted evidence.
+
+**The Trajectory**
+- **If nothing changes:** where this is heading in the next 1-3 months, with reasoning
+- **What it could become:** if specific dynamics shift, where could it actually go (be honest about both ceiling and floor)
+
+**The Playbook**
+3-5 specific moves to change the trajectory. Format each as:
+1. **[Move name]** — concrete description of exactly what to do, when. Not "communicate openly." Concrete: "Next time THEM asks for logistical help, try X instead of Y." Include why this move shifts the dynamic.
+Rank by impact (high/med/low). Don't give moves that contradict the verdict — if they're not into you, the playbook isn't "be more interesting," it's "stop investing free labor and see what happens."
+
+**Watchpoints**
+Over the next 2-4 weeks, look for:
+- ✓ **Positive signals** (3-4 specific things that would suggest the trajectory is shifting toward you)
+- ✗ **Negative signals** (3-4 specific things that mean cut your losses)
+Be specific to THIS dynamic, not generic.
+
+**The Pattern About You** (only include if there's clear evidence)
+What this dynamic might say about your patterns — anxious vs avoidant tendencies, attraction to unavailable people, repeated pursuer/withdrawer roles, etc. Be evidence-grounded; only flag patterns that show up clearly. Otherwise omit this section entirely. Never armchair psychoanalyze.
 
 Rules:
 - Be direct AND calibrated. Honesty cuts both ways.
 - Quote dated lines as evidence in BOTH directions when both exist.
-- If signals are genuinely thin on a lens, say so — don't fill the void with guesses.
+- If signals are thin on a lens or section, skip it — don't fabricate.
 - Don't moralize about [PERSON]. They're a real person.
-- Maximum 600 words. High-density. No filler.
+- Maximum 1100 words. High-density. No filler. Skip empty sections rather than padding.
 
 ═══════════════════════════════════════════════════════════════
 EXPERT FRAMEWORKS — apply these alongside the 6 lenses
@@ -185,12 +200,12 @@ const TIERS = {
   },
   standard: {
     model:      'claude-sonnet-4-6',
-    max_tokens: 1500,
+    max_tokens: 2200,
     prompt:     FULL_PROMPT,
   },
   deep: {
     model:      'claude-opus-4-7',
-    max_tokens: 2500,
+    max_tokens: 3000,
     prompt:     FULL_PROMPT,
   },
 }

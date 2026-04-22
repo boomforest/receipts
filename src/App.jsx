@@ -458,21 +458,7 @@ function Result({ analysis, redaction, themSender, onReset, tier }) {
         {final}
       </div>
 
-      {tier === 'free' && (
-        <div style={{ marginTop: '1rem', padding: '1rem 1.2rem', background: `${BRAND.pink}10`, border: `1px solid ${BRAND.pink}44`, borderRadius: 12 }}>
-          <div style={{ fontSize: '0.7rem', color: BRAND.pink, textTransform: 'uppercase', letterSpacing: '0.12em', fontWeight: 700, marginBottom: '0.4rem' }}>Want the deep read?</div>
-          <div style={{ color: C.text, fontSize: '0.88rem', lineHeight: 1.6, marginBottom: '0.85rem' }}>
-            The Deep Read uses our smartest model and applies the full expert framework — Gottman patterns, attachment styles, Pursue-Withdraw dynamics. Way more nuanced.
-          </div>
-          <button disabled style={{
-            background: BRAND.gradient, color: '#000', border: 'none', borderRadius: 8,
-            padding: '0.6rem 1.1rem', fontSize: '0.82rem', fontWeight: 800, cursor: 'not-allowed',
-            fontFamily: FONT, opacity: 0.7,
-          }}>
-            Upgrade — coming soon
-          </button>
-        </div>
-      )}
+      {tier === 'free' && <UpgradeCard />}
 
       <div style={{ display: 'flex', gap: '0.6rem', marginTop: '1.25rem' }}>
         <button onClick={() => navigator.clipboard?.writeText(final)} style={{
@@ -502,6 +488,89 @@ function ErrorView({ error, onReset }) {
       <button onClick={onReset} style={{ background: BRAND.gradient, color: '#000', border: 'none', borderRadius: 10, padding: '0.85rem 1.5rem', fontWeight: 800, fontSize: '0.9rem', cursor: 'pointer', fontFamily: FONT }}>
         Try again
       </button>
+    </div>
+  )
+}
+
+// ─── UPGRADE CARD ─────────────────────────────────────────────────────────────
+// The scintillating upsell. Sits below every free read.
+function UpgradeCard() {
+  const layers = [
+    { icon: '💞', label: 'Attachment style' },
+    { icon: '🧠', label: 'Myers-Briggs / Enneagram' },
+    { icon: '✨', label: 'Zodiac & astrology' },
+    { icon: '🌌', label: 'Human Design' },
+    { icon: '📖', label: 'Relationship history' },
+    { icon: '🌍', label: 'Cultural context' },
+  ]
+
+  return (
+    <div style={{
+      marginTop: '1.25rem', padding: '1.5rem 1.6rem',
+      background: 'linear-gradient(135deg, rgba(221,34,170,0.10) 0%, rgba(240,112,32,0.06) 100%)',
+      border: `1px solid ${BRAND.pink}55`, borderRadius: 16, position: 'relative', overflow: 'hidden',
+    }}>
+      {/* Glow accent */}
+      <div style={{
+        position: 'absolute', top: -40, right: -40, width: 180, height: 180, pointerEvents: 'none',
+        background: 'radial-gradient(circle, rgba(221,34,170,0.18) 0%, transparent 65%)',
+      }} />
+
+      <div style={{ position: 'relative' }}>
+        <div style={{ fontSize: '0.7rem', color: BRAND.pink, textTransform: 'uppercase', letterSpacing: '0.15em', fontWeight: 700, marginBottom: '0.5rem' }}>
+          The Deep Read
+        </div>
+        <div style={{ color: C.text, fontSize: '1.2rem', fontWeight: 900, letterSpacing: '-0.02em', lineHeight: 1.25, marginBottom: '0.75rem' }}>
+          You can change the trajectory.<br />
+          <span style={{ background: BRAND.gradient, WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>
+            Here's exactly how.
+          </span>
+        </div>
+
+        <div style={{ color: C.text, fontSize: '0.9rem', lineHeight: 1.65, marginBottom: '1.1rem' }}>
+          The Quick Read tells you what's happening. The <strong>Deep Read</strong> tells you what to do about it. You'll get:
+        </div>
+
+        <ul style={{ color: C.textMid, fontSize: '0.85rem', lineHeight: 1.7, paddingLeft: '1.1rem', margin: '0 0 1.1rem' }}>
+          <li><strong style={{ color: C.text }}>Your role</strong> — what you did that shaped this dynamic, with quoted moments</li>
+          <li><strong style={{ color: C.text }}>Their pattern</strong> — what's actually driving them (avoidance ≠ disinterest)</li>
+          <li><strong style={{ color: C.text }}>The trajectory</strong> — where this goes if nothing changes, and where it could go</li>
+          <li><strong style={{ color: C.text }}>The Playbook</strong> — 3-5 specific moves to shift it, ranked by impact</li>
+          <li><strong style={{ color: C.text }}>Watchpoints</strong> — exactly what to look for over the next 2-4 weeks</li>
+          <li><strong style={{ color: C.text }}>The pattern about you</strong> — what this dynamic reveals about your own wiring</li>
+        </ul>
+
+        <div style={{ borderTop: `1px solid ${BRAND.pink}33`, paddingTop: '1.1rem', marginBottom: '1.1rem' }}>
+          <div style={{ fontSize: '0.68rem', color: BRAND.neon, textTransform: 'uppercase', letterSpacing: '0.15em', fontWeight: 700, marginBottom: '0.6rem' }}>
+            Add context lenses
+          </div>
+          <div style={{ color: C.textMid, fontSize: '0.82rem', lineHeight: 1.6, marginBottom: '0.85rem' }}>
+            Optional layers you can add to make the read bespoke:
+          </div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem' }}>
+            {layers.map(l => (
+              <div key={l.label} style={{
+                display: 'inline-flex', alignItems: 'center', gap: '0.4rem',
+                background: C.card, border: `1px solid ${C.border}`, borderRadius: 99,
+                padding: '0.35rem 0.75rem', fontSize: '0.78rem', color: C.text, fontWeight: 600,
+              }}>
+                <span style={{ fontSize: '0.95rem' }}>{l.icon}</span>{l.label}
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <button disabled style={{
+          width: '100%', background: BRAND.gradient, color: '#000', border: 'none', borderRadius: 12,
+          padding: '0.95rem', fontSize: '0.95rem', fontWeight: 800, cursor: 'not-allowed',
+          fontFamily: FONT, opacity: 0.7, letterSpacing: '0.01em',
+        }}>
+          Get the Deep Read · $19 — coming soon
+        </button>
+        <div style={{ textAlign: 'center', color: C.textDim, fontSize: '0.72rem', marginTop: '0.6rem' }}>
+          Same privacy. Same redaction. Way more depth.
+        </div>
+      </div>
     </div>
   )
 }
