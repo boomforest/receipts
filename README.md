@@ -2,6 +2,9 @@
 
 > An honest read of your texts. Six lenses. No bullshit.
 >
+> Built on Gottman, Sue Johnson, Esther Perel, Stan Tatkin, Logan Ury,
+> and attachment theory. Real psychology, not AI vibes.
+>
 > Live at **[receipts.mx](https://receipts.mx)**
 
 Drag in a WhatsApp .txt export → get a sharp, evidence-cited analysis of the relationship dynamic. Names and numbers are stripped client-side before anything leaves the browser.

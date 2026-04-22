@@ -151,9 +151,12 @@ function Upload({ onFile, onPaste }) {
       <h1 style={{ fontSize: 'clamp(1.8rem, 5vw, 2.5rem)', fontWeight: 900, lineHeight: 1.1, letterSpacing: '-0.025em', margin: '0.4rem 0 1rem' }}>
         Drop in a chat. <br /><span style={{ background: BRAND.gradient, WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>Get the truth.</span>
       </h1>
-      <p style={{ color: C.textMid, fontSize: '1rem', lineHeight: 1.6, marginBottom: '1.5rem' }}>
+      <p style={{ color: C.textMid, fontSize: '1rem', lineHeight: 1.6, marginBottom: '0.85rem' }}>
         Six lenses. No bullshit. The friend who tells you what your other friends won't.
       </p>
+      <div style={{ marginBottom: '1.5rem', fontSize: '0.78rem', color: C.textMid, lineHeight: 1.6 }}>
+        <span style={{ color: BRAND.neon, fontWeight: 700 }}>Built on</span> Gottman, Sue Johnson, Esther Perel, Stan Tatkin, Logan Ury, attachment theory. <span style={{ color: C.textDim }}>Real psychology, not vibes.</span>
+      </div>
 
       {/* Tab switcher */}
       <div style={{ display: 'flex', gap: '0.4rem', marginBottom: '1rem', background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: '0.25rem' }}>
