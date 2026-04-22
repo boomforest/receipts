@@ -12,7 +12,44 @@
 //     train models. For an additional zero-retention guarantee at scale,
 //     enroll the workspace in zero-data-retention via Anthropic support.
 
-const SYSTEM_PROMPT = `You are an honest, calibrated reader of personal chat conversations. The user uploaded a chat between themselves and someone they care about. Your job is to read what's actually there — not what the user wants to hear, not what they fear, just the truth of the dynamic.
+// ─── BASIC PROMPT (free tier — Haiku) ────────────────────────────────────────
+// Compressed, no expert grounding. Gives a quick honest read but is
+// noticeably less deep than the full version. Designed to make the
+// upgrade hook obvious.
+
+const BASIC_PROMPT = `You are a calibrated reader of personal chat conversations. The user uploaded a chat between themselves (YOU in the data) and someone they care about (THEM). Names are stripped — refer to the other person as [PERSON] in your response. Refer to the user as "you".
+
+Read what's actually there. Don't default to pessimistic — most chats with mutual warmth are mutual. Don't default to reassuring — distance that's clearly there should be named. Just honest.
+
+Apply 6 lenses, briefly:
+1. INITIATION — who reaches out, how often
+2. RESPONSE ENERGY — engaged/warm vs short/functional
+3. AVAILABILITY — do they make specific plans, or always vague
+4. ESCALATION vs DEFLECTION — when YOU show interest, do THEM move closer or redirect
+5. ASKS — practical, emotional, or curious about you
+6. RECIPROCITY — what THEM gives back
+
+Output (markdown, no preamble, max 250 words total):
+
+**The Verdict**
+ONE clear sentence. Match the evidence — could be "[PERSON] is into you and you're reading them right" OR "Mixed — real warmth, real distance" OR "[PERSON] isn't pursuing this." Pick the truest, not the gloomiest.
+
+**Quick Read**
+2-3 short paragraphs. Cite 2-3 dated quotes as evidence. Cover the strongest signals across the 6 lenses.
+
+**One Move**
+One specific, actionable thing to do.
+
+End with this exact line:
+*This is a quick read. The Deep Read uses better models and applies attachment-style analysis, Gottman patterns, and the full expert framework — upgrade for the full picture.*
+
+Rules: be calibrated, quote dated lines, 250 words max.`
+
+// ─── FULL PROMPT (paid tiers — Sonnet/Opus) ──────────────────────────────────
+// Includes the complete expert grounding (Gottman, Sue Johnson, Perel,
+// Tatkin, Ury, attachment theory). Designed to feel premium.
+
+const FULL_PROMPT = `You are an honest, calibrated reader of personal chat conversations. The user uploaded a chat between themselves and someone they care about. Your job is to read what's actually there — not what the user wants to hear, not what they fear, just the truth of the dynamic.
 
 In the chat below, the user is labeled YOU and the other person is labeled THEM. Names, phone numbers, emails, and links have been stripped and replaced with placeholders ([PHONE], [EMAIL], [LINK], [NAME-1], etc.). When you refer to the other person in your response, write [PERSON] — the real name will be substituted on the user's screen. When you refer to the user, write "you".
 
@@ -132,15 +169,44 @@ Healthy partners function as "go-to" people for each other — first call in cri
 
 These frameworks are TOOLS, not jargon. Apply them silently to sharpen your read. When you see a clear pattern, NAME it briefly in plain language so the user gets the diagnostic value. Never quote experts by name. Never lecture. Stay in the user's vocabulary.`
 
+// ─── TIER ROUTER ─────────────────────────────────────────────────────────────
+// Maps a tier string to model + token budget + system prompt.
+// Free uses a smaller model and condensed prompt; paid tiers get the
+// full expert grounding and the smarter models.
+//
+// NOTE: payment gating happens upstream (Stripe, in a future commit).
+// For v0, the API trusts the tier passed in.
+
+const TIERS = {
+  free: {
+    model:      'claude-haiku-4-5',
+    max_tokens: 600,
+    prompt:     BASIC_PROMPT,
+  },
+  standard: {
+    model:      'claude-sonnet-4-6',
+    max_tokens: 1500,
+    prompt:     FULL_PROMPT,
+  },
+  deep: {
+    model:      'claude-opus-4-7',
+    max_tokens: 2500,
+    prompt:     FULL_PROMPT,
+  },
+}
+
 exports.handler = async (event) => {
   if (event.httpMethod !== 'POST') {
     return { statusCode: 405, body: JSON.stringify({ error: 'Method not allowed' }) }
   }
 
   try {
-    const { chat, stats } = JSON.parse(event.body || '{}')
+    const { chat, stats, tier: rawTier } = JSON.parse(event.body || '{}')
     if (!chat || typeof chat !== 'string') throw new Error('chat (string) required')
     if (chat.length > 200000) throw new Error('Chat too long. Try a shorter export (last 6 months).')
+
+    const tier = TIERS[rawTier] ? rawTier : 'free'
+    const config = TIERS[tier]
 
     const apiKey = process.env.ANTHROPIC_API_KEY
     if (!apiKey) throw new Error('ANTHROPIC_API_KEY not configured')
@@ -167,12 +233,12 @@ Now apply the 6-lens framework. Be calibrated — read what's actually there, bo
         'anthropic-version': '2023-06-01',
       },
       body: JSON.stringify({
-        model:      'claude-haiku-4-5',
-        max_tokens: 800,
+        model:      config.model,
+        max_tokens: config.max_tokens,
         system: [
           {
             type: 'text',
-            text: SYSTEM_PROMPT,
+            text: config.prompt,
             cache_control: { type: 'ephemeral' },   // cache the framework
           },
         ],
@@ -200,6 +266,8 @@ Now apply the 6-lens framework. Be calibrated — read what's actually there, bo
       statusCode: 200,
       body: JSON.stringify({
         analysis,
+        tier,
+        model: config.model,
         usage: json.usage,
       }),
     }

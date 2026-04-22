@@ -13,6 +13,13 @@ export default function App() {
   const [analysis, setAnalysis] = useState('')
   const [error, setError]       = useState('')
   const [sourceKind, setSourceKind] = useState('')    // 'whatsapp' | 'paste'
+  const [tier, setTier]         = useState(() => {
+    // Allow ?tier=standard or ?tier=deep for testing — default 'free'
+    if (typeof window === 'undefined') return 'free'
+    const param = new URLSearchParams(window.location.search).get('tier')
+    return ['free', 'standard', 'deep'].includes(param) ? param : 'free'
+  })
+  const [usedTier, setUsedTier] = useState('')        // tier the server actually ran
 
   const reset = () => {
     setStage('upload'); setFilename(''); setMessages([])
@@ -88,6 +95,7 @@ export default function App() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          tier,
           chat: payload,
           stats: {
             total: summary.total,
@@ -102,6 +110,7 @@ export default function App() {
       const json = await res.json()
       if (!res.ok) throw new Error(json.error || 'Analysis failed')
       setAnalysis(json.analysis)
+      setUsedTier(json.tier || tier)
       setStage('result')
     } catch (e) {
       setError(e.message)
@@ -127,7 +136,7 @@ export default function App() {
         {stage === 'pickme'    && <PickMe summary={summary} meSender={meSender} setMeSender={setMeSender} onNext={goPreview} sourceKind={sourceKind} onFlip={flipMeAssignment} />}
         {stage === 'preview'   && <Preview redaction={redaction} onAnalyze={analyze} onBack={() => setStage('pickme')} />}
         {stage === 'analyzing' && <Analyzing />}
-        {stage === 'result'    && <Result analysis={analysis} redaction={redaction} themSender={redaction.themSender} onReset={reset} />}
+        {stage === 'result'    && <Result analysis={analysis} redaction={redaction} themSender={redaction.themSender} onReset={reset} tier={usedTier} />}
         {stage === 'error'     && <ErrorView error={error} onReset={reset} />}
 
         <div style={{ marginTop: '4rem', textAlign: 'center', color: C.textDim, fontSize: '0.72rem', letterSpacing: '0.04em', lineHeight: 1.7 }}>
@@ -417,13 +426,25 @@ function Analyzing() {
 }
 
 // ─── RESULT ───────────────────────────────────────────────────────────────────
-function Result({ analysis, redaction, themSender, onReset }) {
+function Result({ analysis, redaction, themSender, onReset, tier }) {
   const [displayName, setDisplayName] = React.useState(themSender)
   const final = unredact(analysis, redaction, displayName)
 
+  const tierLabel = {
+    free:     { label: 'Quick Read · Free',         color: C.textMid },
+    standard: { label: 'Deep Read · Standard',      color: BRAND.neon },
+    deep:     { label: 'Deepest Read · Premium',    color: BRAND.neon },
+  }[tier] || { label: 'Quick Read', color: C.textMid }
+
   return (
     <div>
-      <Eyebrow color={BRAND.neon}>The Receipts</Eyebrow>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.75rem', flexWrap: 'wrap', gap: '0.5rem' }}>
+        <Eyebrow color={BRAND.neon}>The Receipts</Eyebrow>
+        <span style={{ fontSize: '0.65rem', color: tierLabel.color, border: `1px solid ${tierLabel.color}55`, borderRadius: 99, padding: '0.18rem 0.6rem', fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase' }}>
+          {tierLabel.label}
+        </span>
+      </div>
+
       <div style={{ marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
         <span style={{ color: C.textMid, fontSize: '0.85rem' }}>Show their name as:</span>
         <input
@@ -436,6 +457,22 @@ function Result({ analysis, redaction, themSender, onReset }) {
       <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 16, padding: '1.5rem 1.6rem', whiteSpace: 'pre-wrap', lineHeight: 1.7, fontSize: '0.95rem', color: C.text }}>
         {final}
       </div>
+
+      {tier === 'free' && (
+        <div style={{ marginTop: '1rem', padding: '1rem 1.2rem', background: `${BRAND.pink}10`, border: `1px solid ${BRAND.pink}44`, borderRadius: 12 }}>
+          <div style={{ fontSize: '0.7rem', color: BRAND.pink, textTransform: 'uppercase', letterSpacing: '0.12em', fontWeight: 700, marginBottom: '0.4rem' }}>Want the deep read?</div>
+          <div style={{ color: C.text, fontSize: '0.88rem', lineHeight: 1.6, marginBottom: '0.85rem' }}>
+            The Deep Read uses our smartest model and applies the full expert framework — Gottman patterns, attachment styles, Pursue-Withdraw dynamics. Way more nuanced.
+          </div>
+          <button disabled style={{
+            background: BRAND.gradient, color: '#000', border: 'none', borderRadius: 8,
+            padding: '0.6rem 1.1rem', fontSize: '0.82rem', fontWeight: 800, cursor: 'not-allowed',
+            fontFamily: FONT, opacity: 0.7,
+          }}>
+            Upgrade — coming soon
+          </button>
+        </div>
+      )}
 
       <div style={{ display: 'flex', gap: '0.6rem', marginTop: '1.25rem' }}>
         <button onClick={() => navigator.clipboard?.writeText(final)} style={{
