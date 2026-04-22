@@ -88,7 +88,7 @@ export default function SignIn({ onClose, onSuccess }) {
           </span>
         </div>
         <div style={{ position: 'relative', color: C.textMid, fontSize: '0.83rem', lineHeight: 1.6, marginBottom: '1.4rem' }}>
-          Your Grail account works on Receipts, <a href="https://grail.mx" target="_blank" rel="noopener" style={{ color: GRAIL.gold, textDecoration: 'none', fontWeight: 700 }}>grail.mx</a>, and every product in the Protocol family. Beta users get the Deep Read free on every chat.
+          Your Grail account works on Receipts, <a href="https://grail.mx" target="_blank" rel="noopener" style={{ color: GRAIL.gold, textDecoration: 'none', fontWeight: 700 }}>grail.mx</a>, and every product in Grail Protocol. Beta users get the Deep Read free on every chat.
         </div>
 
         <div style={{ display: 'flex', gap: '0.4rem', marginBottom: '1rem', background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: '0.25rem' }}>
