@@ -24,7 +24,19 @@ npx netlify dev      # full stack at :8888
 ```
 
 ## Required env vars (Netlify)
-- `ANTHROPIC_API_KEY` — server-side only
+
+Server-side (functions only):
+- `ANTHROPIC_API_KEY` — your Anthropic key
+- `SUPABASE_URL` — same project as Grail (for auth promo)
+- `SUPABASE_ANON_KEY` — Grail's Supabase anon key (used to verify JWTs)
+
+Client-side (build time, prefixed with `VITE_`):
+- `VITE_SUPABASE_URL` — same value as `SUPABASE_URL`
+- `VITE_SUPABASE_ANON_KEY` — same value as `SUPABASE_ANON_KEY`
+
+If the Supabase vars are missing, auth is silently disabled and Receipts
+runs free-tier-only. So the promo can be turned off by removing the
+two `VITE_` env vars and redeploying.
 
 ## How a chat gets exported
 On WhatsApp (iOS or Android):

@@ -218,7 +218,29 @@ exports.handler = async (event) => {
     if (!chat || typeof chat !== 'string') throw new Error('chat (string) required')
     if (chat.length > 200000) throw new Error('Chat too long. Try a shorter export (last 6 months).')
 
-    const tier = TIERS[rawTier] ? rawTier : 'free'
+    // ── Auth check (launch promo: signed-in users get the Deep Read free) ──
+    let promoUser = null
+    const authHeader = event.headers.authorization || event.headers.Authorization
+    const accessToken = authHeader && authHeader.replace(/^Bearer\s+/i, '')
+    if (accessToken && process.env.SUPABASE_URL && process.env.SUPABASE_ANON_KEY) {
+      try {
+        const { createClient } = require('@supabase/supabase-js')
+        const sb = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_ANON_KEY, {
+          auth: { persistSession: false },
+        })
+        const { data, error: authErr } = await sb.auth.getUser(accessToken)
+        if (!authErr && data?.user) promoUser = data.user
+      } catch (authErr) {
+        console.warn('Auth validation failed (continuing as anon):', authErr.message)
+      }
+    }
+
+    // Effective tier:
+    //   - If a valid signed-in user is present → grant 'standard' (Sonnet + full prompt)
+    //     while the launch promo runs. Cheaper than Opus, still full Deep Read.
+    //   - Otherwise honor the requested tier if known, default to 'free'.
+    let tier = TIERS[rawTier] ? rawTier : 'free'
+    if (promoUser && (tier === 'free')) tier = 'standard'
     const config = TIERS[tier]
 
     const apiKey = process.env.ANTHROPIC_API_KEY
@@ -281,6 +303,7 @@ Now apply the 6-lens framework. Be calibrated — read what's actually there, bo
         analysis,
         tier,
         model: config.model,
+        promo: !!promoUser,
         usage: json.usage,
       }),
     }

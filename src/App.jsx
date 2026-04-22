@@ -1,6 +1,8 @@
-import React, { useState } from 'react'
+import React, { useState, useEffect } from 'react'
 import { parseWhatsApp, parseRaw, flipAlternating, summarize } from './parser'
 import { redact, unredact, buildPayload } from './redact'
+import { supabase, authEnabled } from './supabase'
+import SignIn from './SignIn'
 import { C, BRAND, FONT } from './theme'
 
 export default function App() {
@@ -20,6 +22,27 @@ export default function App() {
     return ['free', 'standard', 'deep'].includes(param) ? param : 'free'
   })
   const [usedTier, setUsedTier] = useState('')        // tier the server actually ran
+  const [session, setSession]   = useState(null)
+  const [signInOpen, setSignInOpen] = useState(false)
+
+  // Track Supabase auth session
+  useEffect(() => {
+    if (!authEnabled) return
+    supabase.auth.getSession().then(({ data: { session } }) => setSession(session))
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_e, s) => setSession(s))
+    return () => subscription?.unsubscribe()
+  }, [])
+
+  // Signed-in users get the Deep Read free during the launch promo.
+  // The server is the source of truth — if the JWT validates and the user
+  // is in the Grail database, the backend grants tier=deep.
+  const requestedTier = session ? 'deep' : tier
+
+  const signOut = async () => {
+    if (!supabase) return
+    await supabase.auth.signOut()
+    setSession(null)
+  }
 
   const reset = () => {
     setStage('upload'); setFilename(''); setMessages([])
@@ -91,11 +114,14 @@ export default function App() {
     setStage('analyzing')
     try {
       const payload = buildPayload(redaction.redacted)
+      const headers = { 'Content-Type': 'application/json' }
+      if (session?.access_token) headers.Authorization = `Bearer ${session.access_token}`
+
       const res = await fetch('/.netlify/functions/analyze', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify({
-          tier,
+          tier: requestedTier,
           chat: payload,
           stats: {
             total: summary.total,
@@ -110,7 +136,7 @@ export default function App() {
       const json = await res.json()
       if (!res.ok) throw new Error(json.error || 'Analysis failed')
       setAnalysis(json.analysis)
-      setUsedTier(json.tier || tier)
+      setUsedTier(json.tier || requestedTier)
       setStage('result')
     } catch (e) {
       setError(e.message)
@@ -129,14 +155,33 @@ export default function App() {
             <div style={{ width: 36, height: 36, borderRadius: '50%', background: BRAND.gradient, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18 }}>🧾</div>
             <span style={{ fontWeight: 800, fontSize: '0.95rem', letterSpacing: '-0.01em' }}>Receipts</span>
           </div>
-          <span style={{ fontSize: '0.7rem', color: C.textMid, border: `1px solid ${C.border}`, borderRadius: 99, padding: '0.2rem 0.6rem' }}>v0.1 · beta</span>
+          {authEnabled && (
+            session ? (
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <span style={{ fontSize: '0.72rem', color: BRAND.neon, border: `1px solid ${BRAND.neon}55`, borderRadius: 99, padding: '0.2rem 0.55rem', fontWeight: 700, letterSpacing: '0.04em' }}>
+                  Deep Read unlocked
+                </span>
+                <button onClick={signOut} style={{
+                  background: 'transparent', border: `1px solid ${C.border}`, color: C.textMid,
+                  borderRadius: 99, padding: '0.25rem 0.65rem', fontSize: '0.72rem', cursor: 'pointer', fontFamily: FONT,
+                }}>Sign out</button>
+              </div>
+            ) : (
+              <button onClick={() => setSignInOpen(true)} style={{
+                background: BRAND.gradient, color: '#000', border: 'none',
+                borderRadius: 99, padding: '0.35rem 0.95rem', fontSize: '0.78rem', fontWeight: 800, cursor: 'pointer', fontFamily: FONT,
+              }}>
+                Sign in · Free Deep Read
+              </button>
+            )
+          )}
         </div>
 
         {stage === 'upload'    && <Upload onFile={handleFile} onPaste={handlePaste} />}
         {stage === 'pickme'    && <PickMe summary={summary} meSender={meSender} setMeSender={setMeSender} onNext={goPreview} sourceKind={sourceKind} onFlip={flipMeAssignment} />}
         {stage === 'preview'   && <Preview redaction={redaction} onAnalyze={analyze} onBack={() => setStage('pickme')} />}
         {stage === 'analyzing' && <Analyzing />}
-        {stage === 'result'    && <Result analysis={analysis} redaction={redaction} themSender={redaction.themSender} onReset={reset} tier={usedTier} />}
+        {stage === 'result'    && <Result analysis={analysis} redaction={redaction} themSender={redaction.themSender} onReset={reset} tier={usedTier} onSignIn={() => setSignInOpen(true)} />}
         {stage === 'error'     && <ErrorView error={error} onReset={reset} />}
 
         <div style={{ marginTop: '4rem', textAlign: 'center', color: C.textDim, fontSize: '0.72rem', letterSpacing: '0.04em', lineHeight: 1.7 }}>
@@ -145,6 +190,13 @@ export default function App() {
           We never see your messages and never store them.
         </div>
       </div>
+
+      {signInOpen && (
+        <SignIn
+          onClose={() => setSignInOpen(false)}
+          onSuccess={(s) => { setSession(s); setSignInOpen(false) }}
+        />
+      )}
     </div>
   )
 }
@@ -426,7 +478,7 @@ function Analyzing() {
 }
 
 // ─── RESULT ───────────────────────────────────────────────────────────────────
-function Result({ analysis, redaction, themSender, onReset, tier }) {
+function Result({ analysis, redaction, themSender, onReset, tier, onSignIn }) {
   const [displayName, setDisplayName] = React.useState(themSender)
   const final = unredact(analysis, redaction, displayName)
 
@@ -458,7 +510,7 @@ function Result({ analysis, redaction, themSender, onReset, tier }) {
         {final}
       </div>
 
-      {tier === 'free' && <UpgradeCard />}
+      {tier === 'free' && <UpgradeCard onSignIn={() => onSignIn()} />}
 
       <div style={{ display: 'flex', gap: '0.6rem', marginTop: '1.25rem' }}>
         <button onClick={() => navigator.clipboard?.writeText(final)} style={{
@@ -494,7 +546,7 @@ function ErrorView({ error, onReset }) {
 
 // ─── UPGRADE CARD ─────────────────────────────────────────────────────────────
 // The scintillating upsell. Sits below every free read.
-function UpgradeCard() {
+function UpgradeCard({ onSignIn }) {
   const layers = [
     { icon: '💞', label: 'Attachment style' },
     { icon: '🧠', label: 'Myers-Briggs / Enneagram' },
@@ -560,16 +612,34 @@ function UpgradeCard() {
           </div>
         </div>
 
-        <button disabled style={{
-          width: '100%', background: BRAND.gradient, color: '#000', border: 'none', borderRadius: 12,
-          padding: '0.95rem', fontSize: '0.95rem', fontWeight: 800, cursor: 'not-allowed',
-          fontFamily: FONT, opacity: 0.7, letterSpacing: '0.01em',
-        }}>
-          Get the Deep Read · $19 — coming soon
-        </button>
-        <div style={{ textAlign: 'center', color: C.textDim, fontSize: '0.72rem', marginTop: '0.6rem' }}>
-          Same privacy. Same redaction. Way more depth.
-        </div>
+        {/* Launch promo CTA — sign in via Grail for free Deep Read */}
+        {authEnabled ? (
+          <>
+            <button onClick={onSignIn} style={{
+              width: '100%', background: BRAND.gradient, color: '#000', border: 'none', borderRadius: 12,
+              padding: '0.95rem', fontSize: '0.95rem', fontWeight: 800, cursor: 'pointer',
+              fontFamily: FONT, letterSpacing: '0.01em',
+            }}>
+              Get the Deep Read · Free during launch →
+            </button>
+            <div style={{ textAlign: 'center', color: BRAND.neon, fontSize: '0.72rem', marginTop: '0.6rem', fontWeight: 700, letterSpacing: '0.04em' }}>
+              SIGN UP WITH GRAIL · NO CARD · LIMITED TIME
+            </div>
+          </>
+        ) : (
+          <>
+            <button disabled style={{
+              width: '100%', background: BRAND.gradient, color: '#000', border: 'none', borderRadius: 12,
+              padding: '0.95rem', fontSize: '0.95rem', fontWeight: 800, cursor: 'not-allowed',
+              fontFamily: FONT, opacity: 0.7, letterSpacing: '0.01em',
+            }}>
+              Get the Deep Read · $19 — coming soon
+            </button>
+            <div style={{ textAlign: 'center', color: C.textDim, fontSize: '0.72rem', marginTop: '0.6rem' }}>
+              Same privacy. Same redaction. Way more depth.
+            </div>
+          </>
+        )}
       </div>
     </div>
   )
