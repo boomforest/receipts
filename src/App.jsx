@@ -5,6 +5,13 @@ import { supabase, authEnabled } from './supabase'
 import SignIn from './SignIn'
 import { C, BRAND, GRAIL, FONT } from './theme'
 
+// Convert a gateway-timeout-shaped status into a friendly user message.
+// Anything else flows through unchanged.
+const timeoutOr = (status, fallback) =>
+  (status === 504 || status === 502)
+    ? "We hit our analysis time limit on this chat. We already analyze the most recent ~60 days for focus and speed — if this still happened, export a smaller window (last 30-45 days) and try again. Full-history reads launching as a Premium tier soon."
+    : fallback
+
 export default function App() {
   const [stage, setStage]       = useState('upload')   // upload | pickme | preview | analyzing | result | error
   const [filename, setFilename] = useState('')
@@ -219,16 +226,18 @@ export default function App() {
       try {
         json = JSON.parse(rawText)
       } catch {
+        // (raw text path — couldn't parse as JSON)
         const preview = rawText.slice(0, 120)
-        if (res.status === 504 || res.status === 502 || rawText.startsWith('<')) {
-          throw new Error("Hit our analysis time limit on this chat. We auto-trim long histories already — if this still happens, export a smaller window (last 30-60 days) and try again. Streaming long-history reads is coming.")
-        }
         if (!res.ok) {
-          throw new Error(`Server returned ${res.status}. Response was not JSON: ${preview}`)
+          throw new Error(timeoutOr(res.status, `Server returned ${res.status}. Response was not JSON: ${preview}`))
         }
         throw new Error(`Unexpected non-JSON response: ${preview}`)
       }
-      if (!res.ok) throw new Error(json?.error || `Analyze failed: ${res.status}`)
+      // Got valid JSON back — but a 502/504 can come back with a JSON-shaped
+      // body too (Lambda errors, etc.). Catch the timeout case here as well.
+      if (!res.ok) {
+        throw new Error(timeoutOr(res.status, json?.error || `Analyze failed: ${res.status}`))
+      }
 
       setAnalysis(json.analysis)
       setUsedTier(json.tier || tierToSend)
@@ -364,8 +373,11 @@ function Upload({ onFile, onPaste }) {
       <p style={{ color: C.textMid, fontSize: '1rem', lineHeight: 1.6, marginBottom: '0.85rem' }}>
         Six lenses. No bullshit. The friend who tells you what your other friends won't.
       </p>
-      <div style={{ marginBottom: '1.5rem', fontSize: '0.78rem', color: C.textMid, lineHeight: 1.6 }}>
+      <div style={{ marginBottom: '0.6rem', fontSize: '0.78rem', color: C.textMid, lineHeight: 1.6 }}>
         <span style={{ color: BRAND.neon, fontWeight: 700 }}>Built on</span> Gottman, Sue Johnson, Esther Perel, Stan Tatkin, Logan Ury, attachment theory. <span style={{ color: C.textDim }}>Real psychology, not vibes.</span>
+      </div>
+      <div style={{ marginBottom: '1.5rem', fontSize: '0.74rem', color: C.textDim, lineHeight: 1.6 }}>
+        We focus on the most recent ~60 days — the window where the dynamic actually lives. <span style={{ color: GRAIL.gold }}>Full-history reads launching as a Premium tier soon.</span>
       </div>
 
       {/* Tab switcher */}
