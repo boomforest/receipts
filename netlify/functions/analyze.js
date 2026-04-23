@@ -115,7 +115,7 @@ Rules:
 - Quote dated lines as evidence in BOTH directions when both exist.
 - If signals are thin on a lens or section, skip it — don't fabricate.
 - Don't moralize about [PERSON]. They're a real person.
-- Maximum 700 words total. High-density. Cut filler. Skip empty sections entirely rather than padding. Each section should be 2-3 tight paragraphs MAX.
+- Maximum 350 words total. High-density. Cut filler ruthlessly. Each section is 1-2 sentences with one quoted moment as evidence — NOT a paragraph. Skip any section that doesn't have clear evidence rather than padding. The Verdict and Playbook are the most important sections; if you have to cut, cut from the others first.
 
 ═══════════════════════════════════════════════════════════════
 EXPERT FRAMEWORKS — apply these alongside the 6 lenses
@@ -196,18 +196,19 @@ const TIERS = {
     max_tokens: 400,
     prompt:     BASIC_PROMPT,
   },
-  // Output token generation is the actual latency bottleneck (~70-90 tokens/sec
-  // on Sonnet). Capping at 1500 tokens keeps even worst-case generation under
-  // ~20s — comfortably inside Netlify Pro's 26s function timeout. Free plan
-  // is still 10s no matter what; users on Free will need streaming (next).
+  // Capped to fit Netlify FREE's hard 10s function timeout. Sonnet generates
+  // at ~80 tps; 700 tokens out = ~9s gen time, leaves ~1s for input + network.
+  // Tight, but lands. Streaming responses (supported up to 5min on Netlify)
+  // will let us put back the deeper output without timing out — that's the
+  // next major refactor.
   standard: {
     model:      'claude-sonnet-4-6',
-    max_tokens: 1500,
+    max_tokens: 700,
     prompt:     FULL_PROMPT,
   },
   deep: {
     model:      'claude-sonnet-4-6',
-    max_tokens: 1500,
+    max_tokens: 700,
     prompt:     FULL_PROMPT,
   },
 }
