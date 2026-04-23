@@ -26,6 +26,7 @@ export default function App() {
   const [signInOpen, setSignInOpen] = useState(false)
   const [tokensRemaining, setTokensRemaining] = useState(null)
   const [pendingReanalyze, setPendingReanalyze] = useState(false)
+  const [reanalyzing, setReanalyzing] = useState(false)   // inline loading overlay on result page
 
   // Track Supabase auth session
   useEffect(() => {
@@ -36,15 +37,15 @@ export default function App() {
   }, [])
 
   // After sign-in: if the user was viewing a free Quick Read result, auto
-  // re-run the analysis so the server can upgrade them to a Deep Read in
-  // place (no need to re-upload). Effect waits for `session` to actually
-  // land in state before calling analyze() — avoids stale-closure bugs.
+  // re-run the analysis as a Deep Read in place. Effect waits for `session`
+  // to actually land in state before calling analyze() — avoids stale-closure
+  // bugs where the JWT wouldn't be in headers yet.
   useEffect(() => {
     if (!pendingReanalyze) return
     if (!session?.access_token) return
     if (!redaction) { setPendingReanalyze(false); return }
     setPendingReanalyze(false)
-    analyze()
+    analyze('deep', true)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session, pendingReanalyze])
 
@@ -148,18 +149,30 @@ export default function App() {
     setStage('preview')
   }
 
-  const analyze = async () => {
-    setStage('analyzing')
+  // Single ingest path for both first-run and re-run.
+  //   forceTier:  optional override. If given, sent verbatim to the server.
+  //               (Lets us request 'deep' directly when signed in, sidestepping
+  //                the server-side token check during F&F beta.)
+  //   isReanalyze: if true, keep the user on the result page and show an
+  //                inline loading overlay instead of swapping to the
+  //                'analyzing' screen — fixes the disorienting scroll-to-top.
+  const analyze = async (forceTier, isReanalyze = false) => {
+    if (isReanalyze) setReanalyzing(true)
+    else setStage('analyzing')
     try {
       const payload = buildPayload(redaction.redacted)
       const headers = { 'Content-Type': 'application/json' }
       if (session?.access_token) headers.Authorization = `Bearer ${session.access_token}`
 
+      // Signed in → explicit 'deep' (server honors it, no token gate needed
+      // during beta). Anon → use whatever was set (URL override or 'free').
+      const tierToSend = forceTier || (session ? 'deep' : tier)
+
       const res = await fetch('/.netlify/functions/analyze', {
         method: 'POST',
         headers,
         body: JSON.stringify({
-          tier: requestedTier,
+          tier: tierToSend,
           chat: payload,
           stats: {
             total: summary.total,
@@ -174,14 +187,23 @@ export default function App() {
       const json = await res.json()
       if (!res.ok) throw new Error(json.error || 'Analysis failed')
       setAnalysis(json.analysis)
-      setUsedTier(json.tier || requestedTier)
+      setUsedTier(json.tier || tierToSend)
       if (typeof json.tokens_remaining === 'number') setTokensRemaining(json.tokens_remaining)
-      setStage('result')
+      if (!isReanalyze) setStage('result')
+      setReanalyzing(false)
+      // Scroll the new result into view at the top of the analysis card
+      if (isReanalyze && typeof window !== 'undefined') {
+        setTimeout(() => window.scrollTo({ top: 0, behavior: 'smooth' }), 50)
+      }
     } catch (e) {
       setError(e.message)
       setStage('error')
+      setReanalyzing(false)
     }
   }
+
+  // Convenience handler for the "Re-run as Deep Read" button.
+  const reanalyzeAsDeep = () => analyze('deep', true)
 
   return (
     <div style={{ minHeight: '100vh', background: C.bg, color: C.text, fontFamily: FONT, position: 'relative', overflow: 'hidden' }}>
@@ -241,7 +263,7 @@ export default function App() {
         {stage === 'pickme'    && <PickMe summary={summary} meSender={meSender} setMeSender={setMeSender} onNext={goPreview} sourceKind={sourceKind} onFlip={flipMeAssignment} />}
         {stage === 'preview'   && <Preview redaction={redaction} onAnalyze={analyze} onBack={() => setStage('pickme')} />}
         {stage === 'analyzing' && <Analyzing />}
-        {stage === 'result'    && <Result analysis={analysis} redaction={redaction} themSender={redaction.themSender} onReset={reset} tier={usedTier} onSignIn={() => setSignInOpen(true)} signedIn={!!session} tokensRemaining={tokensRemaining} onReanalyze={analyze} />}
+        {stage === 'result'    && <Result analysis={analysis} redaction={redaction} themSender={redaction.themSender} onReset={reset} tier={usedTier} onSignIn={() => setSignInOpen(true)} signedIn={!!session} tokensRemaining={tokensRemaining} onReanalyze={reanalyzeAsDeep} reanalyzing={reanalyzing} />}
         {stage === 'error'     && <ErrorView error={error} onReset={reset} />}
 
         <div style={{ marginTop: '4rem', textAlign: 'center', color: C.textDim, fontSize: '0.72rem', letterSpacing: '0.04em', lineHeight: 1.7 }}>
@@ -555,7 +577,7 @@ function Analyzing() {
 }
 
 // ─── RESULT ───────────────────────────────────────────────────────────────────
-function Result({ analysis, redaction, themSender, onReset, tier, onSignIn, signedIn, tokensRemaining, onReanalyze }) {
+function Result({ analysis, redaction, themSender, onReset, tier, onSignIn, signedIn, tokensRemaining, onReanalyze, reanalyzing }) {
   const [displayName, setDisplayName] = React.useState(themSender)
   const final = unredact(analysis, redaction, displayName)
 
@@ -591,8 +613,26 @@ function Result({ analysis, redaction, themSender, onReset, tier, onSignIn, sign
         />
       </div>
 
-      <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 16, padding: '1.5rem 1.6rem', whiteSpace: 'pre-wrap', lineHeight: 1.7, fontSize: '0.95rem', color: C.text }}>
-        {final}
+      <div style={{ position: 'relative', background: C.card, border: `1px solid ${C.border}`, borderRadius: 16, padding: '1.5rem 1.6rem', whiteSpace: 'pre-wrap', lineHeight: 1.7, fontSize: '0.95rem', color: C.text }}>
+        <div style={{ opacity: reanalyzing ? 0.25 : 1, transition: 'opacity 0.25s' }}>
+          {final}
+        </div>
+        {reanalyzing && (
+          <div style={{
+            position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column',
+            alignItems: 'center', justifyContent: 'center',
+            background: `${C.card}cc`, backdropFilter: 'blur(4px)',
+            borderRadius: 16, gap: '0.75rem',
+          }}>
+            <div style={{ fontSize: '2rem', animation: 'pulse 1.4s ease-in-out infinite' }}>🪞</div>
+            <div style={{ fontSize: '0.95rem', fontWeight: 800, color: C.text }}>
+              Re-reading at depth…
+            </div>
+            <div style={{ fontSize: '0.78rem', color: C.textMid }}>
+              ~10-30 seconds
+            </div>
+          </div>
+        )}
       </div>
 
       {tier === 'free' && <UpgradeCard onSignIn={() => onSignIn()} onReanalyze={onReanalyze} signedIn={signedIn} tokensRemaining={tokensRemaining} />}
