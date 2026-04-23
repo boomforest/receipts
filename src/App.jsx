@@ -200,9 +200,9 @@ export default function App() {
       const headers = { 'Content-Type': 'application/json' }
       if (activeSession?.access_token) headers.Authorization = `Bearer ${activeSession.access_token}`
 
-      // Signed in → explicit 'deep' (server honors it, no token gate needed
-      // during beta). Anon → use whatever was set (URL override or 'free').
-      const tierToSend = safeForceTier || (activeSession ? 'deep' : tier)
+      // Whatever tier the UI requested wins. Gating comes later — for now
+      // we want to be able to test free vs standard vs deep side by side.
+      const tierToSend = safeForceTier || tier
 
       const res = await fetch('/.netlify/functions/analyze', {
         method: 'POST',
@@ -288,6 +288,12 @@ export default function App() {
       setStreaming(false)
       if (streamErr) throw new Error(streamErr)
       if (!metaDone && !accumulated) throw new Error('Stream ended without any output')
+      // Partial content but no explicit `done` — the connection was cut
+      // mid-analysis (proxy timeout, Anthropic drop, network blip). Tell
+      // the user rather than leaving them with a truncated read.
+      if (!metaDone && accumulated) {
+        throw new Error('The analysis got cut off mid-stream. Please try again — the server was still writing when the connection closed.')
+      }
 
       // Scroll the result into view at the top once streaming finishes
       if (isReanalyze && typeof window !== 'undefined') {
@@ -366,7 +372,7 @@ export default function App() {
 
         {stage === 'upload'    && <Upload onFile={handleFile} onPaste={handlePaste} />}
         {stage === 'pickme'    && <PickMe summary={summary} meSender={meSender} setMeSender={setMeSender} onNext={goPreview} sourceKind={sourceKind} onFlip={flipMeAssignment} />}
-        {stage === 'preview'   && <Preview redaction={redaction} onAnalyze={analyze} onBack={() => setStage('pickme')} />}
+        {stage === 'preview'   && <Preview redaction={redaction} onAnalyze={analyze} onBack={() => setStage('pickme')} initialTier={tier} />}
         {stage === 'analyzing' && <Analyzing />}
         {stage === 'result'    && <Result analysis={analysis} redaction={redaction} themSender={redaction.themSender} onReset={reset} tier={usedTier} onSignIn={() => setSignInOpen(true)} signedIn={!!session} tokensRemaining={tokensRemaining} onReanalyze={reanalyzeAsDeep} reanalyzing={reanalyzing} reanalyzeError={reanalyzeError} streaming={streaming} />}
         {stage === 'error'     && <ErrorView error={error} onReset={reset} />}
@@ -631,20 +637,28 @@ function PickMe({ summary, meSender, setMeSender, onNext, sourceKind, onFlip }) 
 }
 
 // ─── PREVIEW REDACTED ─────────────────────────────────────────────────────────
-function Preview({ redaction, onAnalyze, onBack }) {
+function Preview({ redaction, onAnalyze, onBack, initialTier }) {
   const sample = redaction.redacted.slice(-12)
+  const [pickedTier, setPickedTier] = useState(initialTier || 'free')
+
+  const TIER_OPTIONS = [
+    { id: 'free',     label: 'Quick',    sub: 'Haiku · ~140 words',     model: 'claude-haiku-4-5' },
+    { id: 'standard', label: 'Standard', sub: 'Sonnet · full breakdown', model: 'claude-sonnet-4-6' },
+    { id: 'deep',     label: 'Deep',     sub: 'Opus · max depth',        model: 'claude-opus-4-7' },
+  ]
+
   return (
     <div>
       <Eyebrow>Step 2 of 2</Eyebrow>
       <h2 style={{ fontSize: '1.4rem', fontWeight: 900, letterSpacing: '-0.02em', margin: '0.4rem 0 0.5rem' }}>This is exactly what the AI sees</h2>
       <p style={{ color: C.textMid, fontSize: '0.92rem', marginBottom: '1rem' }}>
-        Names, phone numbers, emails, and links are gone. The AI sees Person A (you) and Person B (them).
+        Names, phone numbers, emails, and links are gone. The AI sees YOU and THEM.
       </p>
 
       <div style={{ background: '#0a0a14', border: `1px solid ${C.border}`, borderRadius: 12, padding: '1rem 1.2rem', maxHeight: 320, overflowY: 'auto', fontFamily: 'ui-monospace, monospace', fontSize: '0.78rem', lineHeight: 1.6, color: C.textMid }}>
         {sample.map((m, i) => (
           <div key={i} style={{ marginBottom: '0.4rem' }}>
-            <span style={{ color: m.sender.startsWith('Person A') ? BRAND.pink : BRAND.orange }}>{m.sender}:</span>{' '}
+            <span style={{ color: m.sender === 'YOU' ? BRAND.pink : BRAND.orange }}>{m.sender}:</span>{' '}
             <span style={{ color: C.text }}>{m.body}</span>
           </div>
         ))}
@@ -656,12 +670,40 @@ function Preview({ redaction, onAnalyze, onBack }) {
         </div>
       )}
 
-      <div style={{ display: 'flex', gap: '0.6rem', marginTop: '1.5rem' }}>
+      <div style={{ marginTop: '1.5rem' }}>
+        <div style={{ fontSize: '0.72rem', fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase', color: C.textMid, marginBottom: '0.5rem' }}>
+          Pick a tier
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '0.5rem' }}>
+          {TIER_OPTIONS.map(opt => {
+            const active = pickedTier === opt.id
+            return (
+              <button
+                key={opt.id}
+                onClick={() => setPickedTier(opt.id)}
+                style={{
+                  background: active ? `${BRAND.pink}18` : 'transparent',
+                  color: active ? C.text : C.textMid,
+                  border: `1px solid ${active ? BRAND.pink : C.border}`,
+                  borderRadius: 10, padding: '0.7rem 0.5rem',
+                  cursor: 'pointer', fontFamily: FONT, textAlign: 'left',
+                  display: 'flex', flexDirection: 'column', gap: '0.15rem',
+                }}
+              >
+                <span style={{ fontWeight: 800, fontSize: '0.85rem' }}>{opt.label}</span>
+                <span style={{ fontSize: '0.68rem', color: C.textMid }}>{opt.sub}</span>
+              </button>
+            )
+          })}
+        </div>
+      </div>
+
+      <div style={{ display: 'flex', gap: '0.6rem', marginTop: '1rem' }}>
         <button onClick={onBack} style={{
           flex: 1, background: 'transparent', color: C.textMid, border: `1px solid ${C.border}`,
           borderRadius: 10, padding: '0.95rem', fontWeight: 600, fontSize: '0.9rem', cursor: 'pointer', fontFamily: FONT,
         }}>← Back</button>
-        <button onClick={() => onAnalyze()} style={{
+        <button onClick={() => onAnalyze(pickedTier)} style={{
           flex: 2, background: BRAND.gradient, color: '#000', border: 'none', borderRadius: 10,
           padding: '0.95rem', fontWeight: 800, fontSize: '0.95rem', cursor: 'pointer', fontFamily: FONT,
         }}>

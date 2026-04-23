@@ -212,6 +212,10 @@ const TIERS = {
 // SSE helpers
 const enc = new TextEncoder()
 const sseLine = (event, data) => enc.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`)
+// SSE comment lines start with `:` — clients ignore them, but the bytes
+// keep intermediate proxies (Netlify edge, Cloudflare, etc.) from killing
+// an "idle" connection while we wait on a slow Anthropic chunk.
+const sseHeartbeat = () => enc.encode(`: keepalive ${Date.now()}\n\n`)
 
 // ─── Functions 2.0 default export ────────────────────────────────────────────
 
@@ -316,11 +320,24 @@ ${chat}
 Now apply the 6-lens framework. Be calibrated — read what's actually there, both warmth and distance.`
 
   // ── Build streaming response ──
+  // Heartbeat lives on the closure shared by start() and cancel() so that
+  // a client disconnect can stop the timer and free the function.
+  let heartbeatTimer = null
+  const stopHeartbeat = () => { if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null } }
+
   const stream = new ReadableStream({
     async start(controller) {
       const send = (event, data) => {
         try { controller.enqueue(sseLine(event, data)) } catch {/* closed */}
       }
+
+      // Heartbeat every 15s while the stream is open. Anthropic occasionally
+      // goes quiet for 20-30s on big-context Opus calls, and Netlify's edge
+      // will close an idle connection. A `:` comment is invisible to the SSE
+      // consumer but counts as activity to every proxy in between.
+      heartbeatTimer = setInterval(() => {
+        try { controller.enqueue(sseHeartbeat()) } catch {/* closed */}
+      }, 15000)
 
       try {
         // Initial metadata so the client can label the read immediately
@@ -410,12 +427,19 @@ Now apply the 6-lens framework. Be calibrated — read what's actually there, bo
         }
 
         send('done', { tokens_remaining: tokensRemaining })
+        stopHeartbeat()
         controller.close()
       } catch (err) {
         console.error('analyze stream error:', err)
         send('error', { error: err.message || 'Analysis failed' })
+        stopHeartbeat()
         controller.close()
       }
+    },
+    cancel() {
+      // Client closed the connection — make sure we stop the heartbeat
+      // so the timer doesn't leak past the request.
+      stopHeartbeat()
     },
   })
 
