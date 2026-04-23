@@ -204,7 +204,7 @@ export default function App() {
       // we want to be able to test free vs standard vs deep side by side.
       const tierToSend = safeForceTier || tier
 
-      const res = await fetch('/.netlify/functions/analyze', {
+      const res = await fetch('/api/analyze', {
         method: 'POST',
         headers,
         body: JSON.stringify({
