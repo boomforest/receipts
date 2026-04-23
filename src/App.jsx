@@ -34,6 +34,7 @@ export default function App() {
   const [session, setSession]   = useState(null)
   const [signInOpen, setSignInOpen] = useState(false)
   const [tokensRemaining, setTokensRemaining] = useState(null)
+  const [tokenExpiresAt, setTokenExpiresAt] = useState(null)
   const [pendingReanalyze, setPendingReanalyze] = useState(false)
   const [reanalyzing, setReanalyzing] = useState(false)   // inline loading overlay on result page
   const [reanalyzeError, setReanalyzeError] = useState('') // banner on result page when reanalyze fails
@@ -60,23 +61,28 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session, pendingReanalyze])
 
-  // When session changes, fetch the user's Deep Read token balance.
+  // When session changes, fetch the user's Deep Read token balance + expiry.
   // RLS allows users to read their own row only. If no row yet, the
   // backend will auto-grant 1 token on the first analyze call — show
-  // the optimistic '1' until then.
+  // the optimistic '1' until then. Expired tokens display as 0 client-side
+  // even before the server confirms.
   useEffect(() => {
     if (!session?.user?.id || !supabase) {
       setTokensRemaining(null)
+      setTokenExpiresAt(null)
       return
     }
     let cancelled = false
     ;(async () => {
       const { data } = await supabase
         .from('receipts_credits')
-        .select('deep_tokens')
+        .select('deep_tokens, expires_at')
         .eq('user_id', session.user.id)
         .maybeSingle()
-      if (!cancelled) setTokensRemaining(data?.deep_tokens ?? 1)  // optimistic 1 for new users
+      if (cancelled) return
+      const expired = data?.expires_at && new Date(data.expires_at) < new Date()
+      setTokensRemaining(expired ? 0 : (data?.deep_tokens ?? 1))  // optimistic 1 for new users
+      setTokenExpiresAt(data?.expires_at ?? null)
     })()
     return () => { cancelled = true }
   }, [session])
@@ -256,11 +262,14 @@ export default function App() {
         if (eventName === 'meta') {
           metaTier = data.tier || metaTier
           setUsedTier(metaTier)
+          if (typeof data.tokens_remaining === 'number') setTokensRemaining(data.tokens_remaining)
+          if (data.token_expires_at) setTokenExpiresAt(data.token_expires_at)
         } else if (eventName === 'text' && typeof data.text === 'string') {
           accumulated += data.text
           setAnalysis(accumulated)
         } else if (eventName === 'done') {
           if (typeof data.tokens_remaining === 'number') setTokensRemaining(data.tokens_remaining)
+          if (data.token_expires_at) setTokenExpiresAt(data.token_expires_at)
           metaDone = true
         } else if (eventName === 'error') {
           streamErr = data.error || 'Stream error'
@@ -331,7 +340,7 @@ export default function App() {
             session ? (
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                 {tokensRemaining > 0 ? (
-                  <span style={{
+                  <span title={tokenExpiresAt ? `Expires ${new Date(tokenExpiresAt).toLocaleDateString()}` : ''} style={{
                     display: 'inline-flex', alignItems: 'center', gap: '0.35rem',
                     fontSize: '0.7rem', color: GRAIL.gold,
                     border: `1px solid ${GRAIL.gold}55`, background: `${GRAIL.gold}10`,
@@ -339,7 +348,12 @@ export default function App() {
                     fontWeight: 800, letterSpacing: '0.06em', textTransform: 'uppercase',
                   }}>
                     <span style={{ fontSize: '0.85rem' }}>{GRAIL.dove}</span>
-                    {tokensRemaining} Deep Read{tokensRemaining === 1 ? '' : 's'} left
+                    {tokensRemaining} Free Deep Read{tokensRemaining === 1 ? '' : 's'}
+                    {tokenExpiresAt && (
+                      <span style={{ fontWeight: 600, opacity: 0.75, letterSpacing: 0, textTransform: 'none' }}>
+                        · til {new Date(tokenExpiresAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
+                      </span>
+                    )}
                   </span>
                 ) : (
                   <span style={{
