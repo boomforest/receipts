@@ -121,8 +121,10 @@ export function unredact(text, redactionResult, displayThemAs) {
 }
 
 // Build the text payload sent to the model. Trims to the most recent N messages
-// to keep token costs predictable.
-export function buildPayload(redactedMessages, maxMessages = 1500) {
+// to keep token costs AND wall-clock latency predictable. Sonnet on ~1500 msgs
+// runs ~10s; reducing to 1000 keeps the deep tier inside Netlify's 26s function
+// timeout even with full expert prompt + paid-tier output cap.
+export function buildPayload(redactedMessages, maxMessages = 1000) {
   const recent = redactedMessages.slice(-maxMessages)
   return recent
     .map(m => `[${m.date.toISOString().slice(0, 16).replace('T', ' ')}] ${m.sender}: ${m.body.replace(/\n/g, ' ⏎ ')}`)

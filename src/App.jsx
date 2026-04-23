@@ -27,6 +27,7 @@ export default function App() {
   const [tokensRemaining, setTokensRemaining] = useState(null)
   const [pendingReanalyze, setPendingReanalyze] = useState(false)
   const [reanalyzing, setReanalyzing] = useState(false)   // inline loading overlay on result page
+  const [reanalyzeError, setReanalyzeError] = useState('') // banner on result page when reanalyze fails
 
   // Track Supabase auth session
   useEffect(() => {
@@ -209,8 +210,26 @@ export default function App() {
           },
         }),
       })
-      const json = await res.json()
-      if (!res.ok) throw new Error(json.error || 'Analysis failed')
+
+      // Read text first — Netlify gateway timeouts return HTML, not JSON.
+      // Parsing as JSON directly would throw "Unexpected token '<'" and bury
+      // the real cause. Surface a useful message instead.
+      const rawText = await res.text()
+      let json
+      try {
+        json = JSON.parse(rawText)
+      } catch {
+        const preview = rawText.slice(0, 120)
+        if (res.status === 504 || res.status === 502) {
+          throw new Error("The analysis timed out. Your chat is large enough that the Deep Read takes longer than our server allows. Try a slightly smaller export (last 6 months instead of full history) and we'll get it through.")
+        }
+        if (!res.ok) {
+          throw new Error(`Server returned ${res.status}. Response was not JSON: ${preview}`)
+        }
+        throw new Error(`Unexpected non-JSON response: ${preview}`)
+      }
+      if (!res.ok) throw new Error(json?.error || `Analyze failed: ${res.status}`)
+
       setAnalysis(json.analysis)
       setUsedTier(json.tier || tierToSend)
       if (typeof json.tokens_remaining === 'number') setTokensRemaining(json.tokens_remaining)
@@ -221,14 +240,20 @@ export default function App() {
         setTimeout(() => window.scrollTo({ top: 0, behavior: 'smooth' }), 50)
       }
     } catch (e) {
-      setError(e.message)
-      setStage('error')
+      // On a re-run from the result page, don't tear down the result —
+      // just surface the error inline so the user can read it and decide.
+      if (isReanalyze) {
+        setReanalyzeError(e.message)
+      } else {
+        setError(e.message)
+        setStage('error')
+      }
       setReanalyzing(false)
     }
   }
 
   // Convenience handler for the "Re-run as Deep Read" button.
-  const reanalyzeAsDeep = () => analyze('deep', true)
+  const reanalyzeAsDeep = () => { setReanalyzeError(''); analyze('deep', true) }
 
   return (
     <div style={{ minHeight: '100vh', background: C.bg, color: C.text, fontFamily: FONT, position: 'relative', overflow: 'hidden' }}>
@@ -288,7 +313,7 @@ export default function App() {
         {stage === 'pickme'    && <PickMe summary={summary} meSender={meSender} setMeSender={setMeSender} onNext={goPreview} sourceKind={sourceKind} onFlip={flipMeAssignment} />}
         {stage === 'preview'   && <Preview redaction={redaction} onAnalyze={analyze} onBack={() => setStage('pickme')} />}
         {stage === 'analyzing' && <Analyzing />}
-        {stage === 'result'    && <Result analysis={analysis} redaction={redaction} themSender={redaction.themSender} onReset={reset} tier={usedTier} onSignIn={() => setSignInOpen(true)} signedIn={!!session} tokensRemaining={tokensRemaining} onReanalyze={reanalyzeAsDeep} reanalyzing={reanalyzing} />}
+        {stage === 'result'    && <Result analysis={analysis} redaction={redaction} themSender={redaction.themSender} onReset={reset} tier={usedTier} onSignIn={() => setSignInOpen(true)} signedIn={!!session} tokensRemaining={tokensRemaining} onReanalyze={reanalyzeAsDeep} reanalyzing={reanalyzing} reanalyzeError={reanalyzeError} />}
         {stage === 'error'     && <ErrorView error={error} onReset={reset} />}
 
         <div style={{ marginTop: '4rem', textAlign: 'center', color: C.textDim, fontSize: '0.72rem', letterSpacing: '0.04em', lineHeight: 1.7 }}>
@@ -602,7 +627,7 @@ function Analyzing() {
 }
 
 // ─── RESULT ───────────────────────────────────────────────────────────────────
-function Result({ analysis, redaction, themSender, onReset, tier, onSignIn, signedIn, tokensRemaining, onReanalyze, reanalyzing }) {
+function Result({ analysis, redaction, themSender, onReset, tier, onSignIn, signedIn, tokensRemaining, onReanalyze, reanalyzing, reanalyzeError }) {
   const [displayName, setDisplayName] = React.useState(themSender)
   const final = unredact(analysis, redaction, displayName)
 
@@ -637,6 +662,16 @@ function Result({ analysis, redaction, themSender, onReset, tier, onSignIn, sign
           style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 8, color: C.text, padding: '0.4rem 0.7rem', fontSize: '0.85rem', outline: 'none', fontFamily: FONT, width: 160 }}
         />
       </div>
+
+      {reanalyzeError && (
+        <div style={{
+          background: 'rgba(239,68,68,0.08)', border: `1px solid ${C.red}55`,
+          borderRadius: 12, padding: '0.85rem 1rem', marginBottom: '0.75rem',
+          color: C.red, fontSize: '0.85rem', lineHeight: 1.55,
+        }}>
+          ⚠️ {reanalyzeError}
+        </div>
+      )}
 
       <div style={{ position: 'relative', background: C.card, border: `1px solid ${C.border}`, borderRadius: 16, padding: '1.5rem 1.6rem', whiteSpace: 'pre-wrap', lineHeight: 1.7, fontSize: '0.95rem', color: C.text }}>
         <div style={{ opacity: reanalyzing ? 0.25 : 1, transition: 'opacity 0.25s' }}>

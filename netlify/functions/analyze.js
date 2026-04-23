@@ -201,8 +201,14 @@ const TIERS = {
     max_tokens: 2200,
     prompt:     FULL_PROMPT,
   },
+  // 'deep' was Opus 4.7 originally — but on real-world chats (3K+ messages)
+  // input processing took 30-60s and Netlify gateway-timed-out the function,
+  // returning HTML to the client (which then choked on JSON.parse). Sonnet
+  // 4.6 with the same FULL_PROMPT lands in 5-10s on the same payloads at
+  // ~95% of the perceived quality. Re-enable Opus once we have streaming
+  // responses or background jobs.
   deep: {
-    model:      'claude-opus-4-7',
+    model:      'claude-sonnet-4-6',
     max_tokens: 3000,
     prompt:     FULL_PROMPT,
   },
@@ -268,11 +274,18 @@ exports.handler = async (event) => {
       tokensRemaining = credits?.deep_tokens ?? 0
     }
 
-    // Effective tier:
-    //   - Signed-in user with token > 0 + asked for free → upgrade to 'deep' and consume
-    //   - Otherwise honor the requested tier if known, default to 'free'
-    //   - Anyone can still explicitly request 'standard' / 'deep' (Stripe gating later)
+    // Tier resolution:
+    //   - 'standard' and 'deep' require a valid signed-in JWT. Anonymous
+    //     requests for paid tiers are silently downgraded to 'free' (kept
+    //     gentle pre-Stripe; can flip to 401 when paid checkout ships).
+    //   - Signed-in user with token > 0 asking for free → consume token and
+    //     upgrade to 'deep' (the F&F promo path).
+    //   - Otherwise honor the requested tier (signed-in users explicitly
+    //     asking for 'deep' get it during F&F).
     let tier = TIERS[rawTier] ? rawTier : 'free'
+    if ((tier === 'standard' || tier === 'deep') && !promoUser) {
+      tier = 'free'   // anon entitlement gate
+    }
     if (promoUser && tier === 'free' && tokensRemaining > 0) {
       tier = 'deep'
       consumedToken = true
