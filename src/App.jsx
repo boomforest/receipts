@@ -33,8 +33,11 @@ export default function App() {
   const [usedTier, setUsedTier] = useState('')        // tier the server actually ran
   const [session, setSession]   = useState(null)
   const [signInOpen, setSignInOpen] = useState(false)
-  const [tokensRemaining, setTokensRemaining] = useState(null)
-  const [tokenExpiresAt, setTokenExpiresAt] = useState(null)
+  const [tokensRemaining, setTokensRemaining] = useState(null)   // deep_tokens (free promo OR paid)
+  const [standardTokens, setStandardTokens] = useState(0)         // standard_tokens (always paid)
+  const [tokenExpiresAt, setTokenExpiresAt] = useState(null)      // promo deep_tokens only — paid never expire
+  const [checkoutBusy,   setCheckoutBusy]   = useState(false)     // true while POSTing to /api/checkout
+  const [paidReturn,     setPaidReturn]     = useState(null)      // 'standard' | 'deep' when returning from Stripe
   const [pendingReanalyze, setPendingReanalyze] = useState(false)
   const [reanalyzing, setReanalyzing] = useState(false)   // inline loading overlay on result page
   const [reanalyzeError, setReanalyzeError] = useState('') // banner on result page when reanalyze fails
@@ -61,30 +64,36 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session, pendingReanalyze])
 
-  // When session changes, fetch the user's Deep Read token balance + expiry.
+  // When session changes, fetch the user's token balances + expiry.
   // RLS allows users to read their own row only. If no row yet, the
-  // backend will auto-grant 1 token on the first analyze call — show
-  // the optimistic '1' until then. Expired tokens display as 0 client-side
-  // even before the server confirms.
-  useEffect(() => {
-    if (!session?.user?.id || !supabase) {
-      setTokensRemaining(null)
-      setTokenExpiresAt(null)
+  // backend will auto-grant 1 deep_token on the first analyze call —
+  // show the optimistic '1' until then. Expired free-promo tokens
+  // display as 0 client-side even before the server confirms.
+  // Paid standard_tokens never expire.
+  const refreshCredits = async (userId) => {
+    if (!userId || !supabase) {
+      setTokensRemaining(null); setStandardTokens(0); setTokenExpiresAt(null)
       return
     }
+    const { data } = await supabase
+      .from('receipts_credits')
+      .select('deep_tokens, standard_tokens, expires_at')
+      .eq('user_id', userId)
+      .maybeSingle()
+    const expired = data?.expires_at && new Date(data.expires_at) < new Date()
+    setTokensRemaining(expired ? 0 : (data?.deep_tokens ?? 1))  // optimistic 1 for new users
+    setStandardTokens(data?.standard_tokens ?? 0)
+    setTokenExpiresAt(data?.expires_at ?? null)
+  }
+
+  useEffect(() => {
     let cancelled = false
     ;(async () => {
-      const { data } = await supabase
-        .from('receipts_credits')
-        .select('deep_tokens, expires_at')
-        .eq('user_id', session.user.id)
-        .maybeSingle()
       if (cancelled) return
-      const expired = data?.expires_at && new Date(data.expires_at) < new Date()
-      setTokensRemaining(expired ? 0 : (data?.deep_tokens ?? 1))  // optimistic 1 for new users
-      setTokenExpiresAt(data?.expires_at ?? null)
+      await refreshCredits(session?.user?.id)
     })()
     return () => { cancelled = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session])
 
   // Effective tier requested:
@@ -262,14 +271,16 @@ export default function App() {
         if (eventName === 'meta') {
           metaTier = data.tier || metaTier
           setUsedTier(metaTier)
-          if (typeof data.tokens_remaining === 'number') setTokensRemaining(data.tokens_remaining)
-          if (data.token_expires_at) setTokenExpiresAt(data.token_expires_at)
+          if (typeof data.deep_tokens === 'number')     setTokensRemaining(data.deep_tokens)
+          if (typeof data.standard_tokens === 'number') setStandardTokens(data.standard_tokens)
+          if (data.token_expires_at)                    setTokenExpiresAt(data.token_expires_at)
         } else if (eventName === 'text' && typeof data.text === 'string') {
           accumulated += data.text
           setAnalysis(accumulated)
         } else if (eventName === 'done') {
-          if (typeof data.tokens_remaining === 'number') setTokensRemaining(data.tokens_remaining)
-          if (data.token_expires_at) setTokenExpiresAt(data.token_expires_at)
+          if (typeof data.deep_tokens === 'number')     setTokensRemaining(data.deep_tokens)
+          if (typeof data.standard_tokens === 'number') setStandardTokens(data.standard_tokens)
+          if (data.token_expires_at)                    setTokenExpiresAt(data.token_expires_at)
           metaDone = true
         } else if (eventName === 'error') {
           streamErr = data.error || 'Stream error'
@@ -324,6 +335,129 @@ export default function App() {
 
   // Convenience handler for the "Re-run as Deep Read" button.
   const reanalyzeAsDeep = () => { setReanalyzeError(''); analyze('deep', true) }
+
+  // ── Stripe checkout: pay for Standard ($3) or Deep ($7) ──
+  // Saves the current chat state to sessionStorage, POSTs /api/checkout to
+  // create a Stripe session, then redirects the browser to the hosted page.
+  // On return, the ?paid= effect below restores state and auto-runs the read.
+  const buyTier = async (tierId) => {
+    if (!session?.access_token) {
+      setSignInOpen(true)
+      return
+    }
+    if (!['standard', 'deep'].includes(tierId)) return
+    setCheckoutBusy(true)
+    try {
+      // Persist the chat-flow state so we can resume after Stripe roundtrip.
+      // Date objects survive JSON via toISOString — we revive them on read.
+      const persisted = {
+        messages: messages.map(m => ({ ...m, date: m.date.toISOString() })),
+        meSender,
+        sourceKind,
+        filename,
+        tier: tierId,
+        savedAt: Date.now(),
+      }
+      try { sessionStorage.setItem('receipts_pending', JSON.stringify(persisted)) } catch {/* quota */}
+
+      const res = await fetch('/api/checkout', {
+        method: 'POST',
+        headers: {
+          'Content-Type':  'application/json',
+          'Authorization': `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify({
+          tier: tierId,
+          return_url: window.location.origin + window.location.pathname,
+        }),
+      })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}))
+        throw new Error(err.error || `Checkout failed: ${res.status}`)
+      }
+      const { url } = await res.json()
+      if (!url) throw new Error('No checkout URL returned')
+      window.location.href = url   // hand off to Stripe
+    } catch (e) {
+      setCheckoutBusy(false)
+      setError(e.message)
+      setStage('error')
+    }
+  }
+
+  // ── Return-from-Stripe handler ──
+  // On mount, look for ?paid=standard|deep in the URL. If present:
+  //   1. Restore the chat state from sessionStorage (so the user lands
+  //      back on the preview screen, not the upload screen)
+  //   2. Mark `paidReturn` so the UI can show a "✓ Payment received" banner
+  //   3. Strip the query param so a refresh doesn't re-trigger
+  // The actual token-grant happens server-side via Stripe webhook; the credits
+  // useEffect above will pick it up the next time we refreshCredits().
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const params  = new URLSearchParams(window.location.search)
+    const paidVal = params.get('paid')
+    if (!paidVal) return
+
+    if (['standard', 'deep'].includes(paidVal)) {
+      setPaidReturn(paidVal)
+      // Restore prior chat state if present
+      try {
+        const raw = sessionStorage.getItem('receipts_pending')
+        if (raw) {
+          const saved = JSON.parse(raw)
+          if (saved?.messages?.length) {
+            const restored = saved.messages.map(m => ({ ...m, date: new Date(m.date) }))
+            setMessages(restored)
+            setMeSender(saved.meSender || '')
+            setSourceKind(saved.sourceKind || '')
+            setFilename(saved.filename || '')
+            const sum = summarize(restored)
+            setSummary(sum)
+            const r = redact(restored, saved.meSender)
+            setRedaction(r)
+            setStage('preview')
+          }
+          sessionStorage.removeItem('receipts_pending')
+        }
+      } catch {/* ignore restore errors */}
+    }
+
+    // Strip ?paid / ?canceled / ?session_id from the URL
+    if (window.history?.replaceState) {
+      const cleanUrl = window.location.origin + window.location.pathname
+      window.history.replaceState({}, '', cleanUrl)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // After a paid return + session lands, poll Supabase for the granted token
+  // (Stripe webhook is async; the token may arrive after we land back).
+  // Stops polling once the token shows up or after ~30s.
+  useEffect(() => {
+    if (!paidReturn || !session?.user?.id) return
+    let attempts = 0
+    let cancelled = false
+    const tick = async () => {
+      if (cancelled) return
+      attempts += 1
+      await refreshCredits(session.user.id)
+      // Re-read fresh values after refreshCredits sets them
+      const { data } = await supabase
+        .from('receipts_credits')
+        .select('deep_tokens, standard_tokens')
+        .eq('user_id', session.user.id)
+        .maybeSingle()
+      const got = paidReturn === 'deep'
+        ? (data?.deep_tokens ?? 0) > 0
+        : (data?.standard_tokens ?? 0) > 0
+      if (got || attempts >= 15) return
+      setTimeout(tick, 2000)
+    }
+    tick()
+    return () => { cancelled = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [paidReturn, session?.user?.id])
 
   return (
     <div style={{ minHeight: '100vh', background: C.bg, color: C.text, fontFamily: FONT, position: 'relative', overflow: 'hidden' }}>
@@ -386,7 +520,7 @@ export default function App() {
 
         {stage === 'upload'    && <Upload onFile={handleFile} onPaste={handlePaste} />}
         {stage === 'pickme'    && <PickMe summary={summary} meSender={meSender} setMeSender={setMeSender} onNext={goPreview} sourceKind={sourceKind} onFlip={flipMeAssignment} />}
-        {stage === 'preview'   && <Preview redaction={redaction} onAnalyze={analyze} onBack={() => setStage('pickme')} initialTier={tier} />}
+        {stage === 'preview'   && <Preview redaction={redaction} onAnalyze={analyze} onBack={() => setStage('pickme')} initialTier={tier} signedIn={!!session} deepTokens={tokensRemaining ?? 0} standardTokens={standardTokens} onBuy={buyTier} checkoutBusy={checkoutBusy} paidReturn={paidReturn} />}
         {stage === 'analyzing' && <Analyzing />}
         {stage === 'result'    && <Result analysis={analysis} redaction={redaction} themSender={redaction.themSender} onReset={reset} tier={usedTier} onSignIn={() => setSignInOpen(true)} signedIn={!!session} tokensRemaining={tokensRemaining} onReanalyze={reanalyzeAsDeep} reanalyzing={reanalyzing} reanalyzeError={reanalyzeError} streaming={streaming} />}
         {stage === 'error'     && <ErrorView error={error} onReset={reset} />}
@@ -651,15 +785,37 @@ function PickMe({ summary, meSender, setMeSender, onNext, sourceKind, onFlip }) 
 }
 
 // ─── PREVIEW REDACTED ─────────────────────────────────────────────────────────
-function Preview({ redaction, onAnalyze, onBack, initialTier }) {
+// Tier picker with three options. For paid tiers, shows the price unless the
+// user already has a token for that tier (then shows "Free · 1 left"). The
+// CTA button morphs based on what the user picked: free → "Get the Receipts",
+// paid w/ token → "Get the Receipts", paid w/o token → "Buy & Run · $X"
+// (which kicks off Stripe Checkout).
+function Preview({ redaction, onAnalyze, onBack, initialTier, signedIn, deepTokens, standardTokens, onBuy, checkoutBusy, paidReturn }) {
   const sample = redaction.redacted.slice(-12)
   const [pickedTier, setPickedTier] = useState(initialTier || 'free')
 
   const TIER_OPTIONS = [
-    { id: 'free',     label: 'Quick',    sub: 'Haiku · ~140 words',     model: 'claude-haiku-4-5' },
-    { id: 'standard', label: 'Standard', sub: 'Sonnet · full breakdown', model: 'claude-sonnet-4-6' },
-    { id: 'deep',     label: 'Deep',     sub: 'Opus · max depth',        model: 'claude-opus-4-7' },
+    { id: 'free',     label: 'Quick',    sub: 'Haiku · ~140 words',      price: 0 },
+    { id: 'standard', label: 'Standard', sub: 'Sonnet · full breakdown', price: 3 },
+    { id: 'deep',     label: 'Deep',     sub: 'Opus · max depth',        price: 7 },
   ]
+
+  const tokensFor = (id) => id === 'deep' ? deepTokens : id === 'standard' ? standardTokens : Infinity
+  const hasFreeRun = (id) => tokensFor(id) > 0
+  const pickedOpt  = TIER_OPTIONS.find(o => o.id === pickedTier) || TIER_OPTIONS[0]
+  const needsBuy   = pickedOpt.price > 0 && !hasFreeRun(pickedTier)
+
+  const ctaLabel = checkoutBusy
+    ? 'Opening Stripe…'
+    : needsBuy
+      ? `Buy & Run · $${pickedOpt.price}`
+      : 'Get the Receipts →'
+
+  const onCta = () => {
+    if (checkoutBusy) return
+    if (needsBuy) onBuy(pickedTier)
+    else onAnalyze(pickedTier)
+  }
 
   return (
     <div>
@@ -668,6 +824,20 @@ function Preview({ redaction, onAnalyze, onBack, initialTier }) {
       <p style={{ color: C.textMid, fontSize: '0.92rem', marginBottom: '1rem' }}>
         Names, phone numbers, emails, and links are gone. The AI sees YOU and THEM.
       </p>
+
+      {paidReturn && (
+        <div style={{
+          background: `${GRAIL.gold}15`, border: `1px solid ${GRAIL.gold}55`,
+          borderRadius: 10, padding: '0.7rem 0.9rem', marginBottom: '1rem',
+          fontSize: '0.85rem', color: GRAIL.gold, fontWeight: 700,
+          display: 'flex', alignItems: 'center', gap: '0.5rem',
+        }}>
+          <span>{GRAIL.dove}</span>
+          {hasFreeRun(paidReturn)
+            ? `Payment received — your ${paidReturn === 'deep' ? 'Deep' : 'Standard'} Read is loaded. Tap Get the Receipts.`
+            : `Payment received — confirming your ${paidReturn === 'deep' ? 'Deep' : 'Standard'} Read…`}
+        </div>
+      )}
 
       <div style={{ background: '#0a0a14', border: `1px solid ${C.border}`, borderRadius: 12, padding: '1rem 1.2rem', maxHeight: 320, overflowY: 'auto', fontFamily: 'ui-monospace, monospace', fontSize: '0.78rem', lineHeight: 1.6, color: C.textMid }}>
         {sample.map((m, i) => (
@@ -691,6 +861,9 @@ function Preview({ redaction, onAnalyze, onBack, initialTier }) {
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '0.5rem' }}>
           {TIER_OPTIONS.map(opt => {
             const active = pickedTier === opt.id
+            const tokens = tokensFor(opt.id)
+            const free   = opt.price === 0
+            const owned  = !free && tokens > 0
             return (
               <button
                 key={opt.id}
@@ -702,14 +875,27 @@ function Preview({ redaction, onAnalyze, onBack, initialTier }) {
                   borderRadius: 10, padding: '0.7rem 0.5rem',
                   cursor: 'pointer', fontFamily: FONT, textAlign: 'left',
                   display: 'flex', flexDirection: 'column', gap: '0.15rem',
+                  position: 'relative',
                 }}
               >
-                <span style={{ fontWeight: 800, fontSize: '0.85rem' }}>{opt.label}</span>
+                <span style={{ fontWeight: 800, fontSize: '0.85rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  {opt.label}
+                  {free ? null : owned ? (
+                    <span style={{ fontSize: '0.62rem', color: GRAIL.gold, fontWeight: 800, letterSpacing: '0.06em' }}>FREE</span>
+                  ) : (
+                    <span style={{ fontSize: '0.78rem', color: C.text, fontWeight: 800 }}>${opt.price}</span>
+                  )}
+                </span>
                 <span style={{ fontSize: '0.68rem', color: C.textMid }}>{opt.sub}</span>
               </button>
             )
           })}
         </div>
+        {needsBuy && !signedIn && (
+          <div style={{ marginTop: '0.7rem', fontSize: '0.75rem', color: C.textMid }}>
+            Sign in with Grail to buy a paid read.
+          </div>
+        )}
       </div>
 
       <div style={{ display: 'flex', gap: '0.6rem', marginTop: '1rem' }}>
@@ -717,11 +903,13 @@ function Preview({ redaction, onAnalyze, onBack, initialTier }) {
           flex: 1, background: 'transparent', color: C.textMid, border: `1px solid ${C.border}`,
           borderRadius: 10, padding: '0.95rem', fontWeight: 600, fontSize: '0.9rem', cursor: 'pointer', fontFamily: FONT,
         }}>← Back</button>
-        <button onClick={() => onAnalyze(pickedTier)} style={{
+        <button onClick={onCta} disabled={checkoutBusy} style={{
           flex: 2, background: BRAND.gradient, color: '#000', border: 'none', borderRadius: 10,
-          padding: '0.95rem', fontWeight: 800, fontSize: '0.95rem', cursor: 'pointer', fontFamily: FONT,
+          padding: '0.95rem', fontWeight: 800, fontSize: '0.95rem',
+          cursor: checkoutBusy ? 'wait' : 'pointer', fontFamily: FONT,
+          opacity: checkoutBusy ? 0.7 : 1,
         }}>
-          Get the Receipts →
+          {ctaLabel}
         </button>
       </div>
     </div>

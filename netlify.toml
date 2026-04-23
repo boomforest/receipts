@@ -3,15 +3,21 @@
   publish = "dist"
   functions = "netlify/functions"   # kept for rollback — see note below
 
-# /api/analyze is proxied to a Cloudflare Worker. Netlify Functions on Free
-# cap streaming responses at 10s wall-clock (Lambda hard kill), which isn't
+# /api/* is proxied to a Cloudflare Worker. Netlify Functions on Free cap
+# streaming responses at 10s wall-clock (Lambda hard kill), which isn't
 # enough for an Opus Deep Read. Workers bill on CPU time only, so awaiting
 # Anthropic's 60-90s stream completes cleanly. Browser sees same-origin.
+#
+# Routes the worker handles:
+#   /analyze         — streaming SSE Quick/Standard/Deep Read
+#   /checkout        — creates a Stripe Checkout Session (paid tiers)
+#   /webhook/stripe  — receives Stripe webhook events (token grants)
+#
 # IMPORTANT: this redirect MUST come before the SPA catch-all below or it
 # gets swallowed and the request returns index.html.
 [[redirects]]
-  from = "/api/analyze"
-  to = "https://receipts-analyze.jproney.workers.dev"
+  from = "/api/*"
+  to = "https://receipts-analyze.jproney.workers.dev/:splat"
   status = 200
   force = true
 
