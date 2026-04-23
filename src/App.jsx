@@ -6,10 +6,12 @@ import SignIn from './SignIn'
 import { C, BRAND, GRAIL, FONT } from './theme'
 
 // Convert a gateway-timeout-shaped status into a friendly user message.
-// Anything else flows through unchanged.
+// Anything else flows through unchanged. Should rarely fire now that
+// the function streams responses instead of buffering them, but kept
+// as a safety net for any infrastructure-level hiccups.
 const timeoutOr = (status, fallback) =>
   (status === 504 || status === 502)
-    ? "We hit our analysis time limit on this chat. We already analyze the most recent ~60 days for focus and speed — if this still happened, export a smaller window (last 30-45 days) and try again. Full-history reads launching as a Premium tier soon."
+    ? "Connection hiccup — please try again. (If this keeps happening, export a smaller chat window and ping us.)"
     : fallback
 
 export default function App() {
@@ -35,6 +37,7 @@ export default function App() {
   const [pendingReanalyze, setPendingReanalyze] = useState(false)
   const [reanalyzing, setReanalyzing] = useState(false)   // inline loading overlay on result page
   const [reanalyzeError, setReanalyzeError] = useState('') // banner on result page when reanalyze fails
+  const [streaming, setStreaming] = useState(false)        // text deltas currently flowing in
 
   // Track Supabase auth session
   useEffect(() => {
@@ -218,33 +221,75 @@ export default function App() {
         }),
       })
 
-      // Read text first — Netlify gateway timeouts return HTML, not JSON.
-      // Parsing as JSON directly would throw "Unexpected token '<'" and bury
-      // the real cause. Surface a useful message instead.
-      const rawText = await res.text()
-      let json
-      try {
-        json = JSON.parse(rawText)
-      } catch {
-        // (raw text path — couldn't parse as JSON)
-        const preview = rawText.slice(0, 120)
-        if (!res.ok) {
-          throw new Error(timeoutOr(res.status, `Server returned ${res.status}. Response was not JSON: ${preview}`))
-        }
-        throw new Error(`Unexpected non-JSON response: ${preview}`)
-      }
-      // Got valid JSON back — but a 502/504 can come back with a JSON-shaped
-      // body too (Lambda errors, etc.). Catch the timeout case here as well.
-      if (!res.ok) {
-        throw new Error(timeoutOr(res.status, json?.error || `Analyze failed: ${res.status}`))
+      // Pre-stream errors come back as JSON. Streaming responses come back as
+      // text/event-stream. Distinguish on Content-Type (and on res.ok).
+      const ct = res.headers.get('content-type') || ''
+      const isStream = ct.includes('text/event-stream')
+
+      if (!isStream) {
+        // Pre-stream error path (non-200 JSON response, or Netlify gateway HTML)
+        const rawText = await res.text()
+        let parsed
+        try { parsed = JSON.parse(rawText) } catch { parsed = null }
+        const fallback = parsed?.error || `Analyze failed: ${res.status}`
+        throw new Error(timeoutOr(res.status, fallback))
       }
 
-      setAnalysis(json.analysis)
-      setUsedTier(json.tier || tierToSend)
-      if (typeof json.tokens_remaining === 'number') setTokensRemaining(json.tokens_remaining)
+      // ── SSE stream — render text deltas as they arrive ──
+      // Clear the analysis pane up front so streaming shows from empty.
+      setAnalysis('')
       if (!isReanalyze) setStage('result')
-      setReanalyzing(false)
-      // Scroll the new result into view at the top of the analysis card
+      setReanalyzing(false)   // overlay off — the streaming text IS the loading indicator
+      setStreaming(true)
+
+      const reader = res.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ''
+      let accumulated = ''
+      let metaTier = tierToSend
+      let metaDone = false
+      let streamErr = null
+
+      const handleEvent = (eventName, dataStr) => {
+        let data = {}
+        try { data = JSON.parse(dataStr) } catch {/* skip */}
+        if (eventName === 'meta') {
+          metaTier = data.tier || metaTier
+          setUsedTier(metaTier)
+        } else if (eventName === 'text' && typeof data.text === 'string') {
+          accumulated += data.text
+          setAnalysis(accumulated)
+        } else if (eventName === 'done') {
+          if (typeof data.tokens_remaining === 'number') setTokensRemaining(data.tokens_remaining)
+          metaDone = true
+        } else if (eventName === 'error') {
+          streamErr = data.error || 'Stream error'
+        }
+      }
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buffer += decoder.decode(value, { stream: true })
+        let idx
+        while ((idx = buffer.indexOf('\n\n')) !== -1) {
+          const rawEvt = buffer.slice(0, idx)
+          buffer = buffer.slice(idx + 2)
+          let eventName = 'message', dataStr = ''
+          for (const line of rawEvt.split('\n')) {
+            if (line.startsWith('event: ')) eventName = line.slice(7).trim()
+            else if (line.startsWith('data: ')) dataStr += line.slice(6)
+          }
+          if (dataStr) handleEvent(eventName, dataStr)
+        }
+        if (streamErr) break
+      }
+
+      setStreaming(false)
+      if (streamErr) throw new Error(streamErr)
+      if (!metaDone && !accumulated) throw new Error('Stream ended without any output')
+
+      // Scroll the result into view at the top once streaming finishes
       if (isReanalyze && typeof window !== 'undefined') {
         setTimeout(() => window.scrollTo({ top: 0, behavior: 'smooth' }), 50)
       }
@@ -258,6 +303,7 @@ export default function App() {
         setStage('error')
       }
       setReanalyzing(false)
+      setStreaming(false)
     }
   }
 
@@ -322,7 +368,7 @@ export default function App() {
         {stage === 'pickme'    && <PickMe summary={summary} meSender={meSender} setMeSender={setMeSender} onNext={goPreview} sourceKind={sourceKind} onFlip={flipMeAssignment} />}
         {stage === 'preview'   && <Preview redaction={redaction} onAnalyze={analyze} onBack={() => setStage('pickme')} />}
         {stage === 'analyzing' && <Analyzing />}
-        {stage === 'result'    && <Result analysis={analysis} redaction={redaction} themSender={redaction.themSender} onReset={reset} tier={usedTier} onSignIn={() => setSignInOpen(true)} signedIn={!!session} tokensRemaining={tokensRemaining} onReanalyze={reanalyzeAsDeep} reanalyzing={reanalyzing} reanalyzeError={reanalyzeError} />}
+        {stage === 'result'    && <Result analysis={analysis} redaction={redaction} themSender={redaction.themSender} onReset={reset} tier={usedTier} onSignIn={() => setSignInOpen(true)} signedIn={!!session} tokensRemaining={tokensRemaining} onReanalyze={reanalyzeAsDeep} reanalyzing={reanalyzing} reanalyzeError={reanalyzeError} streaming={streaming} />}
         {stage === 'error'     && <ErrorView error={error} onReset={reset} />}
 
         <div style={{ marginTop: '4rem', textAlign: 'center', color: C.textDim, fontSize: '0.72rem', letterSpacing: '0.04em', lineHeight: 1.7 }}>
@@ -377,7 +423,7 @@ function Upload({ onFile, onPaste }) {
         <span style={{ color: BRAND.neon, fontWeight: 700 }}>Built on</span> Gottman, Sue Johnson, Esther Perel, Stan Tatkin, Logan Ury, attachment theory. <span style={{ color: C.textDim }}>Real psychology, not vibes.</span>
       </div>
       <div style={{ marginBottom: '1.5rem', fontSize: '0.74rem', color: C.textDim, lineHeight: 1.6 }}>
-        We focus on the most recent ~60 days — the window where the dynamic actually lives. <span style={{ color: GRAIL.gold }}>Full-history reads launching as a Premium tier soon.</span>
+        We focus on the most recent ~4-6 months — the window where the dynamic actually lives. <span style={{ color: GRAIL.gold }}>Full-history reads launching as a Premium tier soon.</span>
       </div>
 
       {/* Tab switcher */}
@@ -639,7 +685,7 @@ function Analyzing() {
 }
 
 // ─── RESULT ───────────────────────────────────────────────────────────────────
-function Result({ analysis, redaction, themSender, onReset, tier, onSignIn, signedIn, tokensRemaining, onReanalyze, reanalyzing, reanalyzeError }) {
+function Result({ analysis, redaction, themSender, onReset, tier, onSignIn, signedIn, tokensRemaining, onReanalyze, reanalyzing, reanalyzeError, streaming }) {
   const [displayName, setDisplayName] = React.useState(themSender)
   const final = unredact(analysis, redaction, displayName)
 
@@ -685,10 +731,24 @@ function Result({ analysis, redaction, themSender, onReset, tier, onSignIn, sign
         </div>
       )}
 
-      <div style={{ position: 'relative', background: C.card, border: `1px solid ${C.border}`, borderRadius: 16, padding: '1.5rem 1.6rem', whiteSpace: 'pre-wrap', lineHeight: 1.7, fontSize: '0.95rem', color: C.text }}>
+      <div style={{ position: 'relative', background: C.card, border: `1px solid ${C.border}`, borderRadius: 16, padding: '1.5rem 1.6rem', whiteSpace: 'pre-wrap', lineHeight: 1.7, fontSize: '0.95rem', color: C.text, minHeight: streaming && !final ? 80 : 'auto' }}>
         <div style={{ opacity: reanalyzing ? 0.25 : 1, transition: 'opacity 0.25s' }}>
           {final}
+          {streaming && (
+            <span style={{
+              display: 'inline-block', width: '0.5em', height: '1em',
+              marginLeft: 2, verticalAlign: 'text-bottom',
+              background: BRAND.pink,
+              animation: 'cursorBlink 1s step-end infinite',
+            }} />
+          )}
+          {streaming && !final && (
+            <span style={{ color: C.textMid, fontSize: '0.88rem', fontStyle: 'italic' }}>
+              Reading the receipts…
+            </span>
+          )}
         </div>
+        <style>{`@keyframes cursorBlink { 50% { opacity: 0 } }`}</style>
         {reanalyzing && (
           <div style={{
             position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column',

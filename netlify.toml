@@ -3,11 +3,8 @@
   publish = "dist"
   functions = "netlify/functions"
 
-# Raise the analyze function timeout from the 10s default to 26s
-# (Pro plan cap). Deep Reads on long chats take ~10-20s with Sonnet.
-# No-op on Free / Starter — caps stay at 10s on those plans.
-[functions."analyze"]
-  timeout = 26
+# analyze is a streaming Functions 2.0 endpoint — it bypasses the sync
+# function timeout (Free's 10s cap). No timeout config needed.
 
 [[redirects]]
   from = "/*"

@@ -120,15 +120,13 @@ export function unredact(text, redactionResult, displayThemAs) {
   return out
 }
 
-// Build the text payload sent to the model. Trims to the most recent N messages
-// to keep token costs AND wall-clock latency predictable.
-//
-// Output token generation (not input) is the actual latency bottleneck for
-// this kind of analysis — ~70-90 tps on Sonnet. Input processing is much
-// cheaper, so the input cap is mostly about cost and signal density, not
-// time. 600 recent messages = ~2-3 months of typical texting, which is the
-// signal window where the dynamic actually lives.
-export function buildPayload(redactedMessages, maxMessages = 600) {
+// Build the text payload sent to the model. Trims to the most recent N messages.
+// With the streaming endpoint there's no function-timeout pressure anymore —
+// the cap is now about cost and signal density, not latency. 1500 recent
+// messages = ~4-6 months of typical texting, which captures the current
+// dynamic with enough history to spot patterns. Premium "Full History"
+// tier (later) raises this further with background processing.
+export function buildPayload(redactedMessages, maxMessages = 1500) {
   const recent = redactedMessages.slice(-maxMessages)
   return recent
     .map(m => `[${m.date.toISOString().slice(0, 16).replace('T', ' ')}] ${m.sender}: ${m.body.replace(/\n/g, ' ⏎ ')}`)

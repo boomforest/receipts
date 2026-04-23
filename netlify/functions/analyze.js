@@ -1,21 +1,27 @@
-// Decodes a redacted chat using Claude Sonnet via the Anthropic API.
+// Streaming Deep Read endpoint.
 //
-// POST body: { chat: string, stats: { total, days, myCount, theirCount, myAvgLen, theirAvgLen } }
-// Response:  { analysis: string }
+// POST body:        { chat: string, stats?: {...}, tier?: 'free'|'standard'|'deep' }
+// Auth (optional):  Authorization: Bearer <supabase JWT>
+// Response:         text/event-stream (SSE)
 //
-// Required env:
-//   ANTHROPIC_API_KEY
+// SSE event protocol:
+//   event: meta   data: { tier, model, promo }
+//   event: text   data: { text: "<chunk>" }
+//   event: done   data: { tokens_remaining: number|null }
+//   event: error  data: { error: "<message>" }
 //
-// Privacy:
-//   - The `anthropic-version` header pins behavior
-//   - Anthropic's default API terms (as of 2026) don't use API inputs to
-//     train models. For an additional zero-retention guarantee at scale,
-//     enroll the workspace in zero-data-retention via Anthropic support.
+// Why streaming: Netlify FREE caps sync functions at 10s. Streaming
+// responses bypass that ceiling (up to 5min) AND give the user instant
+// feedback as text arrives. Big-input runs that used to time out at
+// the gateway now stream cleanly even at full Opus depth.
+//
+// Required env: ANTHROPIC_API_KEY
+// Optional env: SUPABASE_URL, SUPABASE_ANON_KEY (JWT verify),
+//               SUPABASE_SERVICE_ROLE_KEY (token ledger)
+
+import { createClient } from '@supabase/supabase-js'
 
 // ─── BASIC PROMPT (free tier — Haiku) ────────────────────────────────────────
-// Compressed, no expert grounding. Gives a quick honest read but is
-// noticeably less deep than the full version. Designed to make the
-// upgrade hook obvious.
 
 const BASIC_PROMPT = `You are a calibrated reader of personal chat conversations. The user uploaded a chat between themselves (YOU in the data) and someone they care about (THEM). Names are stripped — refer to the other person as [PERSON]. Refer to the user as "you".
 
@@ -47,8 +53,7 @@ End with EXACTLY this line, filled in:
 Rules: stay grounded in real quotes, no invented details, no advice, ~140 words max.`
 
 // ─── FULL PROMPT (paid tiers — Sonnet/Opus) ──────────────────────────────────
-// Includes the complete expert grounding (Gottman, Sue Johnson, Perel,
-// Tatkin, Ury, attachment theory). Designed to feel premium.
+// Restored to full depth now that streaming bypasses the timeout ceiling.
 
 const FULL_PROMPT = `You are an honest, calibrated reader of personal chat conversations. The user uploaded a chat between themselves and someone they care about. Your job is to read what's actually there — not what the user wants to hear, not what they fear, just the truth of the dynamic.
 
@@ -115,7 +120,7 @@ Rules:
 - Quote dated lines as evidence in BOTH directions when both exist.
 - If signals are thin on a lens or section, skip it — don't fabricate.
 - Don't moralize about [PERSON]. They're a real person.
-- Maximum 350 words total. High-density. Cut filler ruthlessly. Each section is 1-2 sentences with one quoted moment as evidence — NOT a paragraph. Skip any section that doesn't have clear evidence rather than padding. The Verdict and Playbook are the most important sections; if you have to cut, cut from the others first.
+- Maximum 1100 words total. High-density. No filler. Skip empty sections rather than padding.
 
 ═══════════════════════════════════════════════════════════════
 EXPERT FRAMEWORKS — apply these alongside the 6 lenses
@@ -183,12 +188,8 @@ Healthy partners function as "go-to" people for each other — first call in cri
 These frameworks are TOOLS, not jargon. Apply them silently to sharpen your read. When you see a clear pattern, NAME it briefly in plain language so the user gets the diagnostic value. Never quote experts by name. Never lecture. Stay in the user's vocabulary.`
 
 // ─── TIER ROUTER ─────────────────────────────────────────────────────────────
-// Maps a tier string to model + token budget + system prompt.
-// Free uses a smaller model and condensed prompt; paid tiers get the
-// full expert grounding and the smarter models.
-//
-// NOTE: payment gating happens upstream (Stripe, in a future commit).
-// For v0, the API trusts the tier passed in.
+// Streaming bypassed the 10s sync ceiling, so paid tiers can have real depth
+// again. Deep is back to Opus + 3000 max_tokens for the F&F beta Cadillac.
 
 const TIERS = {
   free: {
@@ -196,185 +197,239 @@ const TIERS = {
     max_tokens: 400,
     prompt:     BASIC_PROMPT,
   },
-  // Capped to fit Netlify FREE's hard 10s function timeout. Sonnet generates
-  // at ~80 tps; 700 tokens out = ~9s gen time, leaves ~1s for input + network.
-  // Tight, but lands. Streaming responses (supported up to 5min on Netlify)
-  // will let us put back the deeper output without timing out — that's the
-  // next major refactor.
   standard: {
     model:      'claude-sonnet-4-6',
-    max_tokens: 700,
+    max_tokens: 2200,
     prompt:     FULL_PROMPT,
   },
   deep: {
-    model:      'claude-sonnet-4-6',
-    max_tokens: 700,
+    model:      'claude-opus-4-7',
+    max_tokens: 3000,
     prompt:     FULL_PROMPT,
   },
 }
 
-exports.handler = async (event) => {
-  if (event.httpMethod !== 'POST') {
-    return { statusCode: 405, body: JSON.stringify({ error: 'Method not allowed' }) }
+// SSE helpers
+const enc = new TextEncoder()
+const sseLine = (event, data) => enc.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`)
+
+// ─── Functions 2.0 default export ────────────────────────────────────────────
+
+export default async (req) => {
+  if (req.method !== 'POST') {
+    return new Response(JSON.stringify({ error: 'Method not allowed' }), {
+      status: 405, headers: { 'Content-Type': 'application/json' },
+    })
   }
 
+  let body
   try {
-    const { chat, stats, tier: rawTier } = JSON.parse(event.body || '{}')
-    if (!chat || typeof chat !== 'string') throw new Error('chat (string) required')
-    if (chat.length > 200000) throw new Error('Chat too long. Try a shorter export (last 6 months).')
+    body = await req.json()
+  } catch {
+    return new Response(JSON.stringify({ error: 'Body must be JSON' }), {
+      status: 400, headers: { 'Content-Type': 'application/json' },
+    })
+  }
 
-    // ── Auth check (signed-in Grail users may have Deep Read tokens) ──
-    let promoUser = null
-    const authHeader = event.headers.authorization || event.headers.Authorization
-    const accessToken = authHeader && authHeader.replace(/^Bearer\s+/i, '')
-    if (accessToken && process.env.SUPABASE_URL && process.env.SUPABASE_ANON_KEY) {
-      try {
-        const { createClient } = require('@supabase/supabase-js')
-        const sb = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_ANON_KEY, {
-          auth: { persistSession: false },
-        })
-        const { data, error: authErr } = await sb.auth.getUser(accessToken)
-        if (!authErr && data?.user) promoUser = data.user
-      } catch (authErr) {
-        console.warn('Auth validation failed (continuing as anon):', authErr.message)
-      }
-    }
+  const { chat, stats, tier: rawTier } = body
+  if (!chat || typeof chat !== 'string') {
+    return new Response(JSON.stringify({ error: 'chat (string) required' }), {
+      status: 400, headers: { 'Content-Type': 'application/json' },
+    })
+  }
+  if (chat.length > 200000) {
+    return new Response(JSON.stringify({ error: 'Chat too long. Try a shorter export.' }), {
+      status: 413, headers: { 'Content-Type': 'application/json' },
+    })
+  }
 
-    // ── Deep Read token ledger ──
-    // Every Grail account gets 1 free Deep Read on Receipts. Auto-granted
-    // on first request via service-role insert. Atomically decremented
-    // here BEFORE running the analysis so a failed analysis doesn't burn
-    // the token (we'll refund if needed).
-    let tokensRemaining = null
-    let consumedToken = false
-    let serviceClient = null
-    if (promoUser && process.env.SUPABASE_SERVICE_ROLE_KEY) {
-      const { createClient } = require('@supabase/supabase-js')
-      serviceClient = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, {
+  const apiKey = process.env.ANTHROPIC_API_KEY
+  if (!apiKey) {
+    return new Response(JSON.stringify({ error: 'ANTHROPIC_API_KEY not configured' }), {
+      status: 500, headers: { 'Content-Type': 'application/json' },
+    })
+  }
+
+  // ── Auth check (signed-in Grail users may have Deep Read tokens) ──
+  let promoUser = null
+  const authHeader = req.headers.get('authorization') || req.headers.get('Authorization')
+  const accessToken = authHeader && authHeader.replace(/^Bearer\s+/i, '')
+  if (accessToken && process.env.SUPABASE_URL && process.env.SUPABASE_ANON_KEY) {
+    try {
+      const sb = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_ANON_KEY, {
         auth: { persistSession: false },
       })
+      const { data, error: authErr } = await sb.auth.getUser(accessToken)
+      if (!authErr && data?.user) promoUser = data.user
+    } catch (authErr) {
+      console.warn('Auth validation failed (continuing as anon):', authErr.message)
+    }
+  }
 
-      // Read current balance
-      let { data: credits } = await serviceClient
+  // ── Deep Read token ledger ──
+  let tokensRemaining = null
+  let consumedToken = false
+  let serviceClient = null
+  if (promoUser && process.env.SUPABASE_SERVICE_ROLE_KEY) {
+    serviceClient = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, {
+      auth: { persistSession: false },
+    })
+    let { data: credits } = await serviceClient
+      .from('receipts_credits')
+      .select('deep_tokens')
+      .eq('user_id', promoUser.id)
+      .maybeSingle()
+    if (!credits) {
+      const { data: inserted } = await serviceClient
         .from('receipts_credits')
+        .insert({ user_id: promoUser.id, deep_tokens: 1 })
         .select('deep_tokens')
-        .eq('user_id', promoUser.id)
-        .maybeSingle()
-
-      // First-time signed-in user → grant 1 token (idempotent on conflict)
-      if (!credits) {
-        const { data: inserted } = await serviceClient
-          .from('receipts_credits')
-          .insert({ user_id: promoUser.id, deep_tokens: 1 })
-          .select('deep_tokens')
-          .single()
-        credits = inserted || { deep_tokens: 1 }
-      }
-      tokensRemaining = credits?.deep_tokens ?? 0
+        .single()
+      credits = inserted || { deep_tokens: 1 }
     }
+    tokensRemaining = credits?.deep_tokens ?? 0
+  }
 
-    // Tier resolution:
-    //   - 'standard' and 'deep' require a valid signed-in JWT. Anonymous
-    //     requests for paid tiers are silently downgraded to 'free' (kept
-    //     gentle pre-Stripe; can flip to 401 when paid checkout ships).
-    //   - Signed-in user with token > 0 asking for free → consume token and
-    //     upgrade to 'deep' (the F&F promo path).
-    //   - Otherwise honor the requested tier (signed-in users explicitly
-    //     asking for 'deep' get it during F&F).
-    let tier = TIERS[rawTier] ? rawTier : 'free'
-    if ((tier === 'standard' || tier === 'deep') && !promoUser) {
-      tier = 'free'   // anon entitlement gate
-    }
-    if (promoUser && tier === 'free' && tokensRemaining > 0) {
-      tier = 'deep'
-      consumedToken = true
-    }
-    const config = TIERS[tier]
+  // ── Tier resolution ──
+  let tier = TIERS[rawTier] ? rawTier : 'free'
+  if ((tier === 'standard' || tier === 'deep') && !promoUser) {
+    tier = 'free'   // anon entitlement gate
+  }
+  if (promoUser && tier === 'free' && tokensRemaining > 0) {
+    tier = 'deep'
+    consumedToken = true
+  }
+  const config = TIERS[tier]
 
-    const apiKey = process.env.ANTHROPIC_API_KEY
-    if (!apiKey) throw new Error('ANTHROPIC_API_KEY not configured')
-
-    const statsBlock = stats ? `Computed stats from the full chat:
-- ${stats.total} total messages across ${stats.days} days
+  // ── Compose user message ──
+  const statsBlock = stats ? `Computed stats from the full chat:
 - YOU (the user): ${stats.myCount} msgs, avg ${stats.myAvgLen} chars
 - THEM (the other person): ${stats.theirCount} msgs, avg ${stats.theirAvgLen} chars
 
 ` : ''
 
-    const userMessage = `${statsBlock}Below is the chat. Format: [YYYY-MM-DD HH:MM] SENDER: message
+  const userMessage = `${statsBlock}Below is the chat. Format: [YYYY-MM-DD HH:MM] SENDER: message
 SENDER is either YOU or THEM. Refer to the other person as [PERSON] in your response.
 
 ${chat}
 
 Now apply the 6-lens framework. Be calibrated — read what's actually there, both warmth and distance.`
 
-    const res = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'Content-Type':      'application/json',
-        'x-api-key':         apiKey,
-        'anthropic-version': '2023-06-01',
-      },
-      body: JSON.stringify({
-        model:      config.model,
-        max_tokens: config.max_tokens,
-        system: [
-          {
-            type: 'text',
-            text: config.prompt,
-            cache_control: { type: 'ephemeral' },   // cache the framework
-          },
-        ],
-        messages: [
-          { role: 'user', content: userMessage },
-        ],
-      }),
-    })
-
-    const json = await res.json()
-    if (!res.ok) {
-      console.error('Anthropic error:', json)
-      throw new Error(json.error?.message || `Anthropic ${res.status}`)
-    }
-
-    const analysis = (json.content || [])
-      .filter(b => b.type === 'text')
-      .map(b => b.text)
-      .join('\n\n')
-      .trim()
-
-    if (!analysis) throw new Error('Empty response from model')
-
-    // Successful analysis — burn the Deep Read token if we used one
-    if (consumedToken && serviceClient) {
-      try {
-        await serviceClient
-          .from('receipts_credits')
-          .update({
-            deep_tokens: Math.max(0, tokensRemaining - 1),
-            used_at:     new Date().toISOString(),
-            updated_at:  new Date().toISOString(),
-          })
-          .eq('user_id', promoUser.id)
-        tokensRemaining = Math.max(0, tokensRemaining - 1)
-      } catch (decErr) {
-        console.warn('Token decrement failed (analysis still returned):', decErr.message)
+  // ── Build streaming response ──
+  const stream = new ReadableStream({
+    async start(controller) {
+      const send = (event, data) => {
+        try { controller.enqueue(sseLine(event, data)) } catch {/* closed */}
       }
-    }
 
-    return {
-      statusCode: 200,
-      body: JSON.stringify({
-        analysis,
-        tier,
-        model:            config.model,
-        promo:            !!promoUser,
-        tokens_remaining: tokensRemaining,
-        usage:            json.usage,
-      }),
-    }
-  } catch (err) {
-    console.error('analyze error:', err)
-    return { statusCode: 500, body: JSON.stringify({ error: err.message }) }
-  }
+      try {
+        // Initial metadata so the client can label the read immediately
+        send('meta', { tier, model: config.model, promo: !!promoUser })
+
+        // Call Anthropic with stream:true
+        const apiRes = await fetch('https://api.anthropic.com/v1/messages', {
+          method: 'POST',
+          headers: {
+            'Content-Type':      'application/json',
+            'x-api-key':         apiKey,
+            'anthropic-version': '2023-06-01',
+          },
+          body: JSON.stringify({
+            model:      config.model,
+            max_tokens: config.max_tokens,
+            stream:     true,
+            system: [
+              { type: 'text', text: config.prompt, cache_control: { type: 'ephemeral' } },
+            ],
+            messages: [
+              { role: 'user', content: userMessage },
+            ],
+          }),
+        })
+
+        if (!apiRes.ok || !apiRes.body) {
+          const errText = await apiRes.text().catch(() => '')
+          throw new Error(`Anthropic ${apiRes.status}: ${errText.slice(0, 200) || 'no body'}`)
+        }
+
+        // Parse Anthropic SSE → forward text deltas as our SSE
+        const reader = apiRes.body.getReader()
+        const decoder = new TextDecoder()
+        let buffer = ''
+        let receivedAny = false
+
+        while (true) {
+          const { done, value } = await reader.read()
+          if (done) break
+          buffer += decoder.decode(value, { stream: true })
+
+          let idx
+          while ((idx = buffer.indexOf('\n\n')) !== -1) {
+            const rawEvent = buffer.slice(0, idx)
+            buffer = buffer.slice(idx + 2)
+
+            const dataLine = rawEvent.split('\n').find(l => l.startsWith('data: '))
+            if (!dataLine) continue
+            const jsonStr = dataLine.slice(6).trim()
+            if (!jsonStr || jsonStr === '[DONE]') continue
+
+            try {
+              const evt = JSON.parse(jsonStr)
+              if (evt.type === 'content_block_delta' && evt.delta?.type === 'text_delta') {
+                receivedAny = true
+                send('text', { text: evt.delta.text })
+              } else if (evt.type === 'message_stop') {
+                // Anthropic's clean end-of-message
+              } else if (evt.type === 'error') {
+                throw new Error(evt.error?.message || 'Anthropic stream error')
+              }
+            } catch (parseErr) {
+              // Skip malformed events; don't kill the stream
+              if (parseErr.message?.startsWith('Anthropic')) throw parseErr
+            }
+          }
+        }
+
+        if (!receivedAny) throw new Error('Empty response from model')
+
+        // Decrement Deep Read token after success
+        if (consumedToken && serviceClient) {
+          try {
+            await serviceClient
+              .from('receipts_credits')
+              .update({
+                deep_tokens: Math.max(0, tokensRemaining - 1),
+                used_at:     new Date().toISOString(),
+                updated_at:  new Date().toISOString(),
+              })
+              .eq('user_id', promoUser.id)
+            tokensRemaining = Math.max(0, tokensRemaining - 1)
+          } catch (decErr) {
+            console.warn('Token decrement failed (analysis still returned):', decErr.message)
+          }
+        }
+
+        send('done', { tokens_remaining: tokensRemaining })
+        controller.close()
+      } catch (err) {
+        console.error('analyze stream error:', err)
+        send('error', { error: err.message || 'Analysis failed' })
+        controller.close()
+      }
+    },
+  })
+
+  return new Response(stream, {
+    status: 200,
+    headers: {
+      'Content-Type':  'text/event-stream',
+      'Cache-Control': 'no-cache, no-transform',
+      'Connection':    'keep-alive',
+      'X-Accel-Buffering': 'no',
+    },
+  })
+}
+
+export const config = {
+  path: '/.netlify/functions/analyze',
 }
