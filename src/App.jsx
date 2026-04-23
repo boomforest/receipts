@@ -220,8 +220,8 @@ export default function App() {
         json = JSON.parse(rawText)
       } catch {
         const preview = rawText.slice(0, 120)
-        if (res.status === 504 || res.status === 502) {
-          throw new Error("The analysis timed out. Your chat is large enough that the Deep Read takes longer than our server allows. Try a slightly smaller export (last 6 months instead of full history) and we'll get it through.")
+        if (res.status === 504 || res.status === 502 || rawText.startsWith('<')) {
+          throw new Error("Hit our analysis time limit on this chat. We auto-trim long histories already — if this still happens, export a smaller window (last 30-60 days) and try again. Streaming long-history reads is coming.")
         }
         if (!res.ok) {
           throw new Error(`Server returned ${res.status}. Response was not JSON: ${preview}`)

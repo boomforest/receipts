@@ -115,7 +115,7 @@ Rules:
 - Quote dated lines as evidence in BOTH directions when both exist.
 - If signals are thin on a lens or section, skip it — don't fabricate.
 - Don't moralize about [PERSON]. They're a real person.
-- Maximum 1100 words. High-density. No filler. Skip empty sections rather than padding.
+- Maximum 700 words total. High-density. Cut filler. Skip empty sections entirely rather than padding. Each section should be 2-3 tight paragraphs MAX.
 
 ═══════════════════════════════════════════════════════════════
 EXPERT FRAMEWORKS — apply these alongside the 6 lenses
@@ -196,20 +196,18 @@ const TIERS = {
     max_tokens: 400,
     prompt:     BASIC_PROMPT,
   },
+  // Output token generation is the actual latency bottleneck (~70-90 tokens/sec
+  // on Sonnet). Capping at 1500 tokens keeps even worst-case generation under
+  // ~20s — comfortably inside Netlify Pro's 26s function timeout. Free plan
+  // is still 10s no matter what; users on Free will need streaming (next).
   standard: {
     model:      'claude-sonnet-4-6',
-    max_tokens: 2200,
+    max_tokens: 1500,
     prompt:     FULL_PROMPT,
   },
-  // 'deep' was Opus 4.7 originally — but on real-world chats (3K+ messages)
-  // input processing took 30-60s and Netlify gateway-timed-out the function,
-  // returning HTML to the client (which then choked on JSON.parse). Sonnet
-  // 4.6 with the same FULL_PROMPT lands in 5-10s on the same payloads at
-  // ~95% of the perceived quality. Re-enable Opus once we have streaming
-  // responses or background jobs.
   deep: {
     model:      'claude-sonnet-4-6',
-    max_tokens: 3000,
+    max_tokens: 1500,
     prompt:     FULL_PROMPT,
   },
 }

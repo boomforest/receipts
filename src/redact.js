@@ -121,10 +121,14 @@ export function unredact(text, redactionResult, displayThemAs) {
 }
 
 // Build the text payload sent to the model. Trims to the most recent N messages
-// to keep token costs AND wall-clock latency predictable. Sonnet on ~1500 msgs
-// runs ~10s; reducing to 1000 keeps the deep tier inside Netlify's 26s function
-// timeout even with full expert prompt + paid-tier output cap.
-export function buildPayload(redactedMessages, maxMessages = 1000) {
+// to keep token costs AND wall-clock latency predictable.
+//
+// Output token generation (not input) is the actual latency bottleneck for
+// this kind of analysis — ~70-90 tps on Sonnet. Input processing is much
+// cheaper, so the input cap is mostly about cost and signal density, not
+// time. 600 recent messages = ~2-3 months of typical texting, which is the
+// signal window where the dynamic actually lives.
+export function buildPayload(redactedMessages, maxMessages = 600) {
   const recent = redactedMessages.slice(-maxMessages)
   return recent
     .map(m => `[${m.date.toISOString().slice(0, 16).replace('T', ' ')}] ${m.sender}: ${m.body.replace(/\n/g, ' ⏎ ')}`)
