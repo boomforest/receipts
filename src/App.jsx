@@ -25,6 +25,7 @@ export default function App() {
   const [session, setSession]   = useState(null)
   const [signInOpen, setSignInOpen] = useState(false)
   const [tokensRemaining, setTokensRemaining] = useState(null)
+  const [pendingReanalyze, setPendingReanalyze] = useState(false)
 
   // Track Supabase auth session
   useEffect(() => {
@@ -33,6 +34,19 @@ export default function App() {
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_e, s) => setSession(s))
     return () => subscription?.unsubscribe()
   }, [])
+
+  // After sign-in: if the user was viewing a free Quick Read result, auto
+  // re-run the analysis so the server can upgrade them to a Deep Read in
+  // place (no need to re-upload). Effect waits for `session` to actually
+  // land in state before calling analyze() — avoids stale-closure bugs.
+  useEffect(() => {
+    if (!pendingReanalyze) return
+    if (!session?.access_token) return
+    if (!redaction) { setPendingReanalyze(false); return }
+    setPendingReanalyze(false)
+    analyze()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session, pendingReanalyze])
 
   // When session changes, fetch the user's Deep Read token balance.
   // RLS allows users to read their own row only. If no row yet, the
@@ -227,7 +241,7 @@ export default function App() {
         {stage === 'pickme'    && <PickMe summary={summary} meSender={meSender} setMeSender={setMeSender} onNext={goPreview} sourceKind={sourceKind} onFlip={flipMeAssignment} />}
         {stage === 'preview'   && <Preview redaction={redaction} onAnalyze={analyze} onBack={() => setStage('pickme')} />}
         {stage === 'analyzing' && <Analyzing />}
-        {stage === 'result'    && <Result analysis={analysis} redaction={redaction} themSender={redaction.themSender} onReset={reset} tier={usedTier} onSignIn={() => setSignInOpen(true)} signedIn={!!session} tokensRemaining={tokensRemaining} />}
+        {stage === 'result'    && <Result analysis={analysis} redaction={redaction} themSender={redaction.themSender} onReset={reset} tier={usedTier} onSignIn={() => setSignInOpen(true)} signedIn={!!session} tokensRemaining={tokensRemaining} onReanalyze={analyze} />}
         {stage === 'error'     && <ErrorView error={error} onReset={reset} />}
 
         <div style={{ marginTop: '4rem', textAlign: 'center', color: C.textDim, fontSize: '0.72rem', letterSpacing: '0.04em', lineHeight: 1.7 }}>
@@ -251,7 +265,13 @@ export default function App() {
       {signInOpen && (
         <SignIn
           onClose={() => setSignInOpen(false)}
-          onSuccess={(s) => { setSession(s); setSignInOpen(false) }}
+          onSuccess={(s) => {
+            setSession(s)
+            setSignInOpen(false)
+            // If we're sitting on a result, auto re-run with the new auth so
+            // the server upgrades the read to a Deep Read in place.
+            if (stage === 'result' && redaction) setPendingReanalyze(true)
+          }}
         />
       )}
     </div>
@@ -535,7 +555,7 @@ function Analyzing() {
 }
 
 // ─── RESULT ───────────────────────────────────────────────────────────────────
-function Result({ analysis, redaction, themSender, onReset, tier, onSignIn, signedIn, tokensRemaining }) {
+function Result({ analysis, redaction, themSender, onReset, tier, onSignIn, signedIn, tokensRemaining, onReanalyze }) {
   const [displayName, setDisplayName] = React.useState(themSender)
   const final = unredact(analysis, redaction, displayName)
 
@@ -575,7 +595,7 @@ function Result({ analysis, redaction, themSender, onReset, tier, onSignIn, sign
         {final}
       </div>
 
-      {tier === 'free' && <UpgradeCard onSignIn={() => onSignIn()} onReset={onReset} signedIn={signedIn} tokensRemaining={tokensRemaining} />}
+      {tier === 'free' && <UpgradeCard onSignIn={() => onSignIn()} onReanalyze={onReanalyze} signedIn={signedIn} tokensRemaining={tokensRemaining} />}
 
       <div style={{ display: 'flex', gap: '0.6rem', marginTop: '1.25rem' }}>
         <button onClick={() => navigator.clipboard?.writeText(final)} style={{
@@ -616,7 +636,7 @@ function ErrorView({ error, onReset }) {
 //   2. Signed in, tokens > 0 → shouldn't usually happen here (server would've
 //      upgraded), but if it does, just nudge to use it next time
 //   3. Signed in, tokens = 0 → standard "Get the Deep Read · $19" coming-soon
-function UpgradeCard({ onSignIn, onReset, signedIn, tokensRemaining }) {
+function UpgradeCard({ onSignIn, onReanalyze, signedIn, tokensRemaining }) {
   const layers = [
     { icon: '💞', label: 'Attachment style' },
     { icon: '🧠', label: 'Myers-Briggs / Enneagram' },
@@ -703,7 +723,7 @@ function UpgradeCard({ onSignIn, onReset, signedIn, tokensRemaining }) {
 
         {authEnabled && signedIn && tokensRemaining > 0 && (
           <>
-            <button onClick={onReset} style={{
+            <button onClick={onReanalyze} style={{
               display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem',
               width: '100%', background: GRAIL.gradient, color: '#000', border: 'none', borderRadius: 12,
               padding: '0.95rem', fontSize: '0.95rem', fontWeight: 800, cursor: 'pointer',
@@ -711,7 +731,7 @@ function UpgradeCard({ onSignIn, onReset, signedIn, tokensRemaining }) {
               boxShadow: `0 0 24px ${GRAIL.gold}33`,
             }}>
               <span style={{ fontSize: '1.05rem' }}>{GRAIL.dove}</span>
-              Use your Free Deep Read on a chat
+              Re-run this chat as a Deep Read
             </button>
             <div style={{ textAlign: 'center', color: GRAIL.gold, fontSize: '0.72rem', marginTop: '0.6rem', fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase' }}>
               {tokensRemaining} Deep Read{tokensRemaining === 1 ? '' : 's'} left in your account
