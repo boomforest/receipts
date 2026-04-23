@@ -160,13 +160,38 @@ export default function App() {
     if (isReanalyze) setReanalyzing(true)
     else setStage('analyzing')
     try {
+      // Defensive: a callsite that did `onClick={analyze}` would pass the
+      // React SyntheticEvent in here as `forceTier`. Reject anything that
+      // isn't a known tier string — events have circular DOM refs and would
+      // crash JSON.stringify below.
+      const safeForceTier =
+        (forceTier === 'free' || forceTier === 'standard' || forceTier === 'deep')
+          ? forceTier
+          : null
+
+      // Auth-hydration race: on a cold tab the session is loaded async via
+      // supabase.auth.getSession(). If the user clicks fast, our React state
+      // hasn't caught up yet → no Authorization header → server treats them
+      // as anon and returns a free read. Await the live session here so the
+      // very first analyze on a cold load still gets the JWT attached.
+      let activeSession = session
+      if (!activeSession && supabase) {
+        try {
+          const { data } = await supabase.auth.getSession()
+          if (data?.session) {
+            activeSession = data.session
+            setSession(data.session)
+          }
+        } catch {/* fall through as anon */}
+      }
+
       const payload = buildPayload(redaction.redacted)
       const headers = { 'Content-Type': 'application/json' }
-      if (session?.access_token) headers.Authorization = `Bearer ${session.access_token}`
+      if (activeSession?.access_token) headers.Authorization = `Bearer ${activeSession.access_token}`
 
       // Signed in → explicit 'deep' (server honors it, no token gate needed
       // during beta). Anon → use whatever was set (URL override or 'free').
-      const tierToSend = forceTier || (session ? 'deep' : tier)
+      const tierToSend = safeForceTier || (activeSession ? 'deep' : tier)
 
       const res = await fetch('/.netlify/functions/analyze', {
         method: 'POST',
@@ -553,7 +578,7 @@ function Preview({ redaction, onAnalyze, onBack }) {
           flex: 1, background: 'transparent', color: C.textMid, border: `1px solid ${C.border}`,
           borderRadius: 10, padding: '0.95rem', fontWeight: 600, fontSize: '0.9rem', cursor: 'pointer', fontFamily: FONT,
         }}>← Back</button>
-        <button onClick={onAnalyze} style={{
+        <button onClick={() => onAnalyze()} style={{
           flex: 2, background: BRAND.gradient, color: '#000', border: 'none', borderRadius: 10,
           padding: '0.95rem', fontWeight: 800, fontSize: '0.95rem', cursor: 'pointer', fontFamily: FONT,
         }}>
