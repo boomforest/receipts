@@ -433,7 +433,10 @@ export default function App() {
 
   // After a paid return + session lands, poll Supabase for the granted token
   // (Stripe webhook is async; the token may arrive after we land back).
-  // Stops polling once the token shows up or after ~30s.
+  // The MOMENT the token shows up, auto-trigger the read at the bought tier
+  // — so the user doesn't have to tap "Get the Receipts" again. Their intent
+  // was clear when they hit "Buy & Run".
+  // Gives up after ~30s if the webhook never delivered.
   useEffect(() => {
     if (!paidReturn || !session?.user?.id) return
     let attempts = 0
@@ -442,7 +445,6 @@ export default function App() {
       if (cancelled) return
       attempts += 1
       await refreshCredits(session.user.id)
-      // Re-read fresh values after refreshCredits sets them
       const { data } = await supabase
         .from('receipts_credits')
         .select('deep_tokens, standard_tokens')
@@ -451,13 +453,21 @@ export default function App() {
       const got = paidReturn === 'deep'
         ? (data?.deep_tokens ?? 0) > 0
         : (data?.standard_tokens ?? 0) > 0
-      if (got || attempts >= 15) return
+      if (got) {
+        // Token landed — fire the analyze immediately. Capture the tier
+        // before clearing so the closure sees the right value.
+        const tierToRun = paidReturn
+        setPaidReturn(null)
+        if (redaction) analyze(tierToRun)
+        return
+      }
+      if (attempts >= 15) return
       setTimeout(tick, 2000)
     }
     tick()
     return () => { cancelled = true }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [paidReturn, session?.user?.id])
+  }, [paidReturn, session?.user?.id, redaction])
 
   return (
     <div style={{ minHeight: '100vh', background: C.bg, color: C.text, fontFamily: FONT, position: 'relative', overflow: 'hidden' }}>
@@ -833,9 +843,7 @@ function Preview({ redaction, onAnalyze, onBack, initialTier, signedIn, deepToke
           display: 'flex', alignItems: 'center', gap: '0.5rem',
         }}>
           <span>{GRAIL.dove}</span>
-          {hasFreeRun(paidReturn)
-            ? `Payment received — your ${paidReturn === 'deep' ? 'Deep' : 'Standard'} Read is loaded. Tap Get the Receipts.`
-            : `Payment received — confirming your ${paidReturn === 'deep' ? 'Deep' : 'Standard'} Read…`}
+          Payment received — starting your {paidReturn === 'deep' ? 'Deep' : 'Standard'} Read…
         </div>
       )}
 
