@@ -1,9 +1,12 @@
 import React, { useState, useEffect } from 'react'
+import { PayPalScriptProvider, PayPalButtons } from '@paypal/react-paypal-js'
 import { parseWhatsApp, parseRaw, flipAlternating, summarize } from './parser'
 import { redact, unredact, buildPayload } from './redact'
 import { supabase, authEnabled } from './supabase'
 import SignIn from './SignIn'
 import { C, BRAND, GRAIL, FONT } from './theme'
+
+const PAYPAL_CLIENT_ID = import.meta.env.VITE_PAYPAL_CLIENT_ID || ''
 
 // Convert a gateway-timeout-shaped status into a friendly user message.
 // Anything else flows through unchanged. Should rarely fire now that
@@ -385,6 +388,26 @@ export default function App() {
     }
   }
 
+  // ── PayPal checkout: in-page popup, no redirect ──
+  // Called from the PayPal button's onApprove after user approves the popup.
+  // Server captures the order, grants the token, then we refresh credits and
+  // auto-run the analysis at the purchased tier.
+  const completePayPalPurchase = async (tierId, paypalOrderId) => {
+    if (!session?.access_token) throw new Error('Not signed in')
+    const res = await fetch('/.netlify/functions/capture-paypal-checkout', {
+      method: 'POST',
+      headers: {
+        'Content-Type':  'application/json',
+        'Authorization': `Bearer ${session.access_token}`,
+      },
+      body: JSON.stringify({ paypal_order_id: paypalOrderId }),
+    })
+    const json = await res.json()
+    if (!res.ok || !json.ok) throw new Error(json.error || 'Could not grant token')
+    await refreshCredits(session.user.id)
+    if (redaction) analyze(tierId)
+  }
+
   // ── Return-from-Stripe handler ──
   // On mount, look for ?paid=standard|deep in the URL. If present:
   //   1. Restore the chat state from sessionStorage (so the user lands
@@ -530,7 +553,7 @@ export default function App() {
 
         {stage === 'upload'    && <Upload onFile={handleFile} onPaste={handlePaste} />}
         {stage === 'pickme'    && <PickMe summary={summary} meSender={meSender} setMeSender={setMeSender} onNext={goPreview} sourceKind={sourceKind} onFlip={flipMeAssignment} />}
-        {stage === 'preview'   && <Preview redaction={redaction} onAnalyze={analyze} onBack={() => setStage('pickme')} initialTier={tier} signedIn={!!session} deepTokens={tokensRemaining ?? 0} standardTokens={standardTokens} onBuy={buyTier} checkoutBusy={checkoutBusy} paidReturn={paidReturn} />}
+        {stage === 'preview'   && <Preview redaction={redaction} onAnalyze={analyze} onBack={() => setStage('pickme')} initialTier={tier} signedIn={!!session} session={session} deepTokens={tokensRemaining ?? 0} standardTokens={standardTokens} onBuy={buyTier} onPayPal={completePayPalPurchase} checkoutBusy={checkoutBusy} paidReturn={paidReturn} />}
         {stage === 'analyzing' && <Analyzing />}
         {stage === 'result'    && <Result analysis={analysis} redaction={redaction} themSender={redaction.themSender} onReset={reset} tier={usedTier} onSignIn={() => setSignInOpen(true)} signedIn={!!session} tokensRemaining={tokensRemaining} onReanalyze={reanalyzeAsDeep} reanalyzing={reanalyzing} reanalyzeError={reanalyzeError} streaming={streaming} />}
         {stage === 'error'     && <ErrorView error={error} onReset={reset} />}
@@ -800,9 +823,11 @@ function PickMe({ summary, meSender, setMeSender, onNext, sourceKind, onFlip }) 
 // CTA button morphs based on what the user picked: free → "Get the Receipts",
 // paid w/ token → "Get the Receipts", paid w/o token → "Buy & Run · $X"
 // (which kicks off Stripe Checkout).
-function Preview({ redaction, onAnalyze, onBack, initialTier, signedIn, deepTokens, standardTokens, onBuy, checkoutBusy, paidReturn }) {
+function Preview({ redaction, onAnalyze, onBack, initialTier, signedIn, session, deepTokens, standardTokens, onBuy, onPayPal, checkoutBusy, paidReturn }) {
   const sample = redaction.redacted.slice(-12)
   const [pickedTier, setPickedTier] = useState(initialTier || 'free')
+  const [paypalBusy, setPaypalBusy] = useState(false)
+  const [paypalErr,  setPaypalErr]  = useState('')
 
   const TIER_OPTIONS = [
     { id: 'free',     label: 'Quick',    sub: 'Haiku · ~140 words',      price: 0 },
@@ -911,15 +936,72 @@ function Preview({ redaction, onAnalyze, onBack, initialTier, signedIn, deepToke
           flex: 1, background: 'transparent', color: C.textMid, border: `1px solid ${C.border}`,
           borderRadius: 10, padding: '0.95rem', fontWeight: 600, fontSize: '0.9rem', cursor: 'pointer', fontFamily: FONT,
         }}>← Back</button>
-        <button onClick={onCta} disabled={checkoutBusy} style={{
+        <button onClick={onCta} disabled={checkoutBusy || paypalBusy} style={{
           flex: 2, background: BRAND.gradient, color: '#000', border: 'none', borderRadius: 10,
           padding: '0.95rem', fontWeight: 800, fontSize: '0.95rem',
-          cursor: checkoutBusy ? 'wait' : 'pointer', fontFamily: FONT,
-          opacity: checkoutBusy ? 0.7 : 1,
+          cursor: (checkoutBusy || paypalBusy) ? 'wait' : 'pointer', fontFamily: FONT,
+          opacity: (checkoutBusy || paypalBusy) ? 0.7 : 1,
         }}>
           {ctaLabel}
         </button>
       </div>
+
+      {needsBuy && signedIn && PAYPAL_CLIENT_ID && (
+        <div style={{ marginTop: '1rem' }}>
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: '0.75rem',
+            color: C.textMid, fontSize: '0.7rem', letterSpacing: '0.08em',
+            textTransform: 'uppercase', fontWeight: 700, marginBottom: '0.6rem',
+          }}>
+            <div style={{ flex: 1, height: 1, background: C.border }} />
+            or
+            <div style={{ flex: 1, height: 1, background: C.border }} />
+          </div>
+
+          <PayPalScriptProvider options={{
+            'client-id': PAYPAL_CLIENT_ID,
+            currency: 'USD',
+            intent: 'capture',
+          }}>
+            <PayPalButtons
+              style={{ layout: 'horizontal', color: 'gold', shape: 'rect', label: 'pay', tagline: false, height: 42 }}
+              disabled={paypalBusy || checkoutBusy}
+              forceReRender={[pickedTier]}
+              createOrder={async () => {
+                setPaypalErr('')
+                const res = await fetch('/.netlify/functions/create-paypal-checkout', {
+                  method: 'POST',
+                  headers: {
+                    'Content-Type':  'application/json',
+                    'Authorization': `Bearer ${session?.access_token}`,
+                  },
+                  body: JSON.stringify({ tier: pickedTier }),
+                })
+                const json = await res.json()
+                if (!res.ok || !json.orderId) throw new Error(json.error || 'Could not start PayPal')
+                return json.orderId
+              }}
+              onApprove={async (data) => {
+                setPaypalBusy(true)
+                try {
+                  await onPayPal(pickedTier, data.orderID)
+                } catch (e) {
+                  setPaypalErr(`Payment went through but token grant failed: ${e.message}. Save your confirmation: ${data.orderID}`)
+                }
+                setPaypalBusy(false)
+              }}
+              onError={(e) => setPaypalErr(e?.message || 'PayPal error — try card instead.')}
+              onCancel={() => setPaypalErr('PayPal checkout canceled.')}
+            />
+          </PayPalScriptProvider>
+
+          {paypalErr && (
+            <div style={{ marginTop: '0.6rem', color: BRAND.orange, fontSize: '0.8rem' }}>
+              {paypalErr}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   )
 }
