@@ -931,75 +931,84 @@ function Preview({ redaction, onAnalyze, onBack, initialTier, signedIn, session,
         )}
       </div>
 
-      <div style={{ display: 'flex', gap: '0.6rem', marginTop: '1rem' }}>
-        <button onClick={onBack} style={{
-          flex: 1, background: 'transparent', color: C.textMid, border: `1px solid ${C.border}`,
-          borderRadius: 10, padding: '0.95rem', fontWeight: 600, fontSize: '0.9rem', cursor: 'pointer', fontFamily: FONT,
-        }}>← Back</button>
-        <button onClick={onCta} disabled={checkoutBusy || paypalBusy} style={{
-          flex: 2, background: BRAND.gradient, color: '#000', border: 'none', borderRadius: 10,
-          padding: '0.95rem', fontWeight: 800, fontSize: '0.95rem',
-          cursor: (checkoutBusy || paypalBusy) ? 'wait' : 'pointer', fontFamily: FONT,
-          opacity: (checkoutBusy || paypalBusy) ? 0.7 : 1,
-        }}>
-          {ctaLabel}
-        </button>
-      </div>
-
-      {needsBuy && signedIn && PAYPAL_CLIENT_ID && (
+      {needsBuy && signedIn && PAYPAL_CLIENT_ID ? (
         <div style={{ marginTop: '1rem' }}>
-          <div style={{
-            display: 'flex', alignItems: 'center', gap: '0.75rem',
-            color: C.textMid, fontSize: '0.7rem', letterSpacing: '0.08em',
-            textTransform: 'uppercase', fontWeight: 700, marginBottom: '0.6rem',
-          }}>
-            <div style={{ flex: 1, height: 1, background: C.border }} />
-            or
-            <div style={{ flex: 1, height: 1, background: C.border }} />
-          </div>
+          <button onClick={onBack} style={{
+            background: 'transparent', color: C.textMid, border: 'none',
+            fontSize: '0.82rem', padding: '0.25rem 0', cursor: 'pointer',
+            fontFamily: FONT, marginBottom: '0.6rem',
+          }}>← Back</button>
 
-          <PayPalScriptProvider options={{
-            'client-id': PAYPAL_CLIENT_ID,
-            currency: 'USD',
-            intent: 'capture',
-          }}>
-            <PayPalButtons
-              style={{ layout: 'horizontal', color: 'gold', shape: 'rect', label: 'pay', tagline: false, height: 42 }}
-              disabled={paypalBusy || checkoutBusy}
-              forceReRender={[pickedTier]}
-              createOrder={async () => {
-                setPaypalErr('')
-                const res = await fetch('/.netlify/functions/create-paypal-checkout', {
-                  method: 'POST',
-                  headers: {
-                    'Content-Type':  'application/json',
-                    'Authorization': `Bearer ${session?.access_token}`,
-                  },
-                  body: JSON.stringify({ tier: pickedTier }),
-                })
-                const json = await res.json()
-                if (!res.ok || !json.orderId) throw new Error(json.error || 'Could not start PayPal')
-                return json.orderId
-              }}
-              onApprove={async (data) => {
-                setPaypalBusy(true)
-                try {
-                  await onPayPal(pickedTier, data.orderID)
-                } catch (e) {
-                  setPaypalErr(`Payment went through but token grant failed: ${e.message}. Save your confirmation: ${data.orderID}`)
-                }
-                setPaypalBusy(false)
-              }}
-              onError={(e) => setPaypalErr(e?.message || 'PayPal error — try card instead.')}
-              onCancel={() => setPaypalErr('PayPal checkout canceled.')}
-            />
-          </PayPalScriptProvider>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.6rem', alignItems: 'stretch' }}>
+            <button onClick={() => onBuy(pickedTier)} disabled={checkoutBusy || paypalBusy} style={{
+              background: BRAND.gradient, color: '#000', border: 'none', borderRadius: 10,
+              padding: '0 0.75rem', height: 44,
+              fontWeight: 800, fontSize: '0.9rem',
+              cursor: (checkoutBusy || paypalBusy) ? 'wait' : 'pointer', fontFamily: FONT,
+              opacity: (checkoutBusy || paypalBusy) ? 0.7 : 1,
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+            }}>
+              {checkoutBusy ? 'Opening Stripe…' : `Card · $${pickedOpt.price}`}
+            </button>
+
+            <PayPalScriptProvider options={{
+              'client-id': PAYPAL_CLIENT_ID,
+              currency: 'USD',
+              intent: 'capture',
+            }}>
+              <PayPalButtons
+                style={{ layout: 'horizontal', color: 'gold', shape: 'rect', label: 'pay', tagline: false, height: 44 }}
+                disabled={paypalBusy || checkoutBusy}
+                forceReRender={[pickedTier]}
+                createOrder={async () => {
+                  setPaypalErr('')
+                  const res = await fetch('/.netlify/functions/create-paypal-checkout', {
+                    method: 'POST',
+                    headers: {
+                      'Content-Type':  'application/json',
+                      'Authorization': `Bearer ${session?.access_token}`,
+                    },
+                    body: JSON.stringify({ tier: pickedTier }),
+                  })
+                  const json = await res.json()
+                  if (!res.ok || !json.orderId) throw new Error(json.error || 'Could not start PayPal')
+                  return json.orderId
+                }}
+                onApprove={async (data) => {
+                  setPaypalBusy(true)
+                  try {
+                    await onPayPal(pickedTier, data.orderID)
+                  } catch (e) {
+                    setPaypalErr(`Payment went through but token grant failed: ${e.message}. Save your confirmation: ${data.orderID}`)
+                  }
+                  setPaypalBusy(false)
+                }}
+                onError={(e) => setPaypalErr(e?.message || 'PayPal error — try card instead.')}
+                onCancel={() => setPaypalErr('PayPal checkout canceled.')}
+              />
+            </PayPalScriptProvider>
+          </div>
 
           {paypalErr && (
             <div style={{ marginTop: '0.6rem', color: BRAND.orange, fontSize: '0.8rem' }}>
               {paypalErr}
             </div>
           )}
+        </div>
+      ) : (
+        <div style={{ display: 'flex', gap: '0.6rem', marginTop: '1rem' }}>
+          <button onClick={onBack} style={{
+            flex: 1, background: 'transparent', color: C.textMid, border: `1px solid ${C.border}`,
+            borderRadius: 10, padding: '0.95rem', fontWeight: 600, fontSize: '0.9rem', cursor: 'pointer', fontFamily: FONT,
+          }}>← Back</button>
+          <button onClick={onCta} disabled={checkoutBusy || paypalBusy} style={{
+            flex: 2, background: BRAND.gradient, color: '#000', border: 'none', borderRadius: 10,
+            padding: '0.95rem', fontWeight: 800, fontSize: '0.95rem',
+            cursor: (checkoutBusy || paypalBusy) ? 'wait' : 'pointer', fontFamily: FONT,
+            opacity: (checkoutBusy || paypalBusy) ? 0.7 : 1,
+          }}>
+            {ctaLabel}
+          </button>
         </div>
       )}
     </div>
