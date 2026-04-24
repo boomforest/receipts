@@ -1107,13 +1107,20 @@ function UpgradeCard({ onSignIn, onReanalyze, signedIn, tokensRemaining }) {
         </ul>
 
         <div style={{ borderTop: `1px solid ${BRAND.pink}33`, paddingTop: '1.1rem', marginBottom: '1.1rem' }}>
-          <div style={{ fontSize: '0.68rem', color: BRAND.neon, textTransform: 'uppercase', letterSpacing: '0.15em', fontWeight: 700, marginBottom: '0.6rem' }}>
-            Add context lenses
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.6rem' }}>
+            <div style={{ fontSize: '0.68rem', color: BRAND.neon, textTransform: 'uppercase', letterSpacing: '0.15em', fontWeight: 700 }}>
+              Add context lenses
+            </div>
+            <span style={{
+              fontSize: '0.62rem', color: C.textMid, background: C.card,
+              border: `1px solid ${C.border}`, borderRadius: 99,
+              padding: '0.15rem 0.5rem', textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 700,
+            }}>Coming soon</span>
           </div>
           <div style={{ color: C.textMid, fontSize: '0.82rem', lineHeight: 1.6, marginBottom: '0.85rem' }}>
-            Optional layers you can add to make the read bespoke:
+            Optional layers you'll be able to add to make the read bespoke:
           </div>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem' }}>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem', opacity: 0.55 }}>
             {layers.map(l => (
               <div key={l.label} style={{
                 display: 'inline-flex', alignItems: 'center', gap: '0.4rem',
